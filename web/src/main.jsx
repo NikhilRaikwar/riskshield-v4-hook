@@ -1,0 +1,914 @@
+import "@rainbow-me/rainbowkit/styles.css";
+import "./riskshield-design.css";
+
+import React, { useEffect, useMemo } from "react";
+import { createRoot } from "react-dom/client";
+import { connectorsForWallets, RainbowKitProvider, ConnectButton } from "@rainbow-me/rainbowkit";
+import { injectedWallet, metaMaskWallet } from "@rainbow-me/rainbowkit/wallets";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  createConfig,
+  http,
+  WagmiProvider,
+  useAccount,
+  useDisconnect,
+  usePublicClient,
+  useSwitchChain,
+  useWalletClient,
+} from "wagmi";
+import { unichainSepolia } from "wagmi/chains";
+import { encodeAbiParameters, erc20Abi, formatEther, formatUnits, maxUint256, parseUnits } from "viem";
+import { riskshieldMarkup } from "./riskshieldMarkup.js";
+
+const ADDRESSES = {
+  poolManager: "0x00B036B58a818B1BC34d502D3fE730Db729e62AC",
+  mockUSDC: "0xb0cD9Ec340036f47F4655d9BBfE1E172E3209A06",
+  mockRiskAsset: "0x72290EB00a06c4a5582c64e8E336F6e4D242bE87",
+  vault: "0xAE2fbD03F210206774BD2A43Bc96823a18022a5f",
+  hook: "0xd9E54DB85EC7BbBFbFE1d47fae90b941aA4aC7C0",
+  router: "0x11fB0B3C8355fF826a3BC9316ea5B0A46E2FF0C0",
+};
+
+const POOL_ID = "0xf7ab8f4eeb4e9ae1a8bf02a06f9d65aeeabefe42d29c38473c354eaaad1d4ba5";
+const MIN_SQRT_PRICE_PLUS_ONE = 4295128740n;
+
+const poolKey = {
+  currency0: ADDRESSES.mockRiskAsset,
+  currency1: ADDRESSES.mockUSDC,
+  fee: 8388608,
+  tickSpacing: 60,
+  hooks: ADDRESSES.hook,
+};
+
+const vaultAbi = [
+  {
+    type: "function",
+    name: "depositJunior",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "poolId", type: "bytes32" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "reserveAvailable",
+    stateMutability: "view",
+    inputs: [{ name: "poolId", type: "bytes32" }],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "juniorBalanceOf",
+    stateMutability: "view",
+    inputs: [
+      { name: "poolId", type: "bytes32" },
+      { name: "account", type: "address" },
+    ],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "poolReserves",
+    stateMutability: "view",
+    inputs: [{ name: "poolId", type: "bytes32" }],
+    outputs: [
+      { name: "juniorCapital", type: "uint256" },
+      { name: "accruedPremiums", type: "uint256" },
+      { name: "paidCoverage", type: "uint256" },
+    ],
+  },
+  {
+    type: "function",
+    name: "nextPositionId",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "seniorPositions",
+    stateMutability: "view",
+    inputs: [{ name: "positionId", type: "uint256" }],
+    outputs: [
+      { name: "poolId", type: "bytes32" },
+      { name: "owner", type: "address" },
+      { name: "entryAmount0", type: "uint256" },
+      { name: "entryAmount1", type: "uint256" },
+      { name: "entryPriceWad", type: "uint256" },
+      { name: "liquidity", type: "uint256" },
+      { name: "closed", type: "bool" },
+    ],
+  },
+];
+
+const hookAbi = [
+  {
+    type: "function",
+    name: "lastPremiumBps",
+    stateMutability: "view",
+    inputs: [{ name: "poolId", type: "bytes32" }],
+    outputs: [{ type: "uint256" }],
+  },
+];
+
+const mockTokenAbi = [
+  ...erc20Abi,
+  {
+    type: "function",
+    name: "mint",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [],
+  },
+];
+
+const routerAbi = [
+  {
+    type: "function",
+    name: "modifyLiquidity",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "key",
+        type: "tuple",
+        components: [
+          { name: "currency0", type: "address" },
+          { name: "currency1", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "tickSpacing", type: "int24" },
+          { name: "hooks", type: "address" },
+        ],
+      },
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "tickLower", type: "int24" },
+          { name: "tickUpper", type: "int24" },
+          { name: "liquidityDelta", type: "int256" },
+          { name: "salt", type: "bytes32" },
+        ],
+      },
+      { name: "hookData", type: "bytes" },
+    ],
+    outputs: [
+      { name: "delta", type: "int256" },
+      { name: "feesAccrued", type: "int256" },
+    ],
+  },
+  {
+    type: "function",
+    name: "swapAndFundPremium",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "key",
+        type: "tuple",
+        components: [
+          { name: "currency0", type: "address" },
+          { name: "currency1", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "tickSpacing", type: "int24" },
+          { name: "hooks", type: "address" },
+        ],
+      },
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "zeroForOne", type: "bool" },
+          { name: "amountSpecified", type: "int256" },
+          { name: "sqrtPriceLimitX96", type: "uint160" },
+        ],
+      },
+      { name: "hookData", type: "bytes" },
+      { name: "reservePremiumAmount", type: "uint256" },
+      { name: "premiumPoolId", type: "bytes32" },
+    ],
+    outputs: [{ name: "delta", type: "int256" }],
+  },
+];
+
+const connectors = connectorsForWallets([
+  {
+    groupName: "RiskShield",
+    wallets: [injectedWallet, metaMaskWallet],
+  },
+], {
+  appName: "RiskShield",
+  projectId: "riskshield-local-demo",
+});
+
+const config = createConfig({
+  chains: [unichainSepolia],
+  ssr: false,
+  connectors,
+  transports: {
+    [unichainSepolia.id]: http("https://sepolia.unichain.org"),
+  },
+});
+
+const queryClient = new QueryClient();
+
+function short(value) {
+  if (!value) return "";
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function fmtUsdc(value) {
+  return `${Number(formatUnits(value ?? 0n, 6)).toLocaleString(undefined, {
+    maximumFractionDigits: 2,
+  })} mUSDC`;
+}
+
+function fmtRisk(value) {
+  return `${Number(formatUnits(value ?? 0n, 18)).toLocaleString(undefined, {
+    maximumFractionDigits: 4,
+  })} mRISK`;
+}
+
+function fmtAllowance(value, decimals, symbol) {
+  const amount = value ?? 0n;
+  if (amount === 0n) return `0 ${symbol}`;
+  if (amount > maxUint256 / 2n) return `Unlimited ${symbol}`;
+
+  const normalized = Number(formatUnits(amount, decimals));
+  if (normalized >= 1_000_000) {
+    return `${normalized.toLocaleString(undefined, {
+      notation: "compact",
+      maximumFractionDigits: 2,
+    })} ${symbol}`;
+  }
+
+  return `${normalized.toLocaleString(undefined, {
+    maximumFractionDigits: decimals === 6 ? 2 : 4,
+  })} ${symbol}`;
+}
+
+function fmtEth(value) {
+  return `${Number(formatEther(value ?? 0n)).toLocaleString(undefined, {
+    maximumFractionDigits: 5,
+  })} ETH`;
+}
+
+function toast(msg, duration = 3600) {
+  const container = document.getElementById("toast-container");
+  if (!container) return;
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.textContent = msg;
+  container.appendChild(el);
+  requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add("show")));
+  setTimeout(() => {
+    el.classList.remove("show");
+    setTimeout(() => el.remove(), 400);
+  }, duration);
+}
+
+function setText(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value;
+}
+
+function getInput(id, fallback) {
+  const value = Number(document.getElementById(id)?.value ?? fallback);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function markButton(id, state, label) {
+  const btn = document.getElementById(id);
+  if (!btn) return;
+  btn.classList.remove("state-pending", "state-done");
+  if (state) btn.classList.add(state);
+  if (label) btn.textContent = label;
+  btn.disabled = state === "state-pending";
+}
+
+function markDone(dotId) {
+  document.getElementById(dotId)?.classList.add("done");
+}
+
+function txUrl(hash) {
+  return `https://sepolia.uniscan.xyz/tx/${hash}`;
+}
+
+function setTxLine(targetId, hash) {
+  const target = document.getElementById(targetId);
+  if (!target) return;
+  const link = document.createElement("a");
+  link.className = "tx-hash";
+  link.href = txUrl(hash);
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  link.textContent = `${hash.slice(0, 14)}...`;
+  target.appendChild(document.createElement("br"));
+  target.appendChild(link);
+}
+
+function addTxActivity(label, hash, status = "Submitted") {
+  const list = document.getElementById("tx-activity-list");
+  if (!list || !hash) return;
+  list.querySelector(".tx-empty")?.remove();
+  const existing = document.getElementById(`tx-${hash}`);
+  if (existing) {
+    existing.querySelector(".tx-status").textContent = status;
+    return;
+  }
+  const row = document.createElement("div");
+  row.className = "tx-activity-row";
+  row.id = `tx-${hash}`;
+  row.innerHTML = `
+    <div>
+      <div class="tx-label">${label}</div>
+      <a class="tx-hash" href="${txUrl(hash)}" target="_blank" rel="noreferrer">${hash.slice(0, 14)}...${hash.slice(-6)} ↗</a>
+    </div>
+    <span class="tx-status">${status}</span>
+  `;
+  list.prepend(row);
+}
+
+function encodeSeniorHookData(account) {
+  return encodeAbiParameters(
+    [
+      { type: "uint8" },
+      { type: "address" },
+      { type: "uint256" },
+      { type: "uint256" },
+      { type: "uint256" },
+    ],
+    [1, account, parseUnits("1", 18), parseUnits("2000", 6), parseUnits("2000", 18)],
+  );
+}
+
+function encodeTickHookData(tick) {
+  return encodeAbiParameters([{ type: "int24" }], [tick]);
+}
+
+function RiskShieldShell() {
+  const { address, chainId, isConnected } = useAccount();
+  const { disconnect, disconnectAsync } = useDisconnect();
+  const publicClient = usePublicClient({ chainId: unichainSepolia.id });
+  const { data: walletClient } = useWalletClient({ chainId: unichainSepolia.id });
+  const { switchChainAsync } = useSwitchChain();
+
+  const live = useMemo(
+    () => ({ address, chainId, disconnect, disconnectAsync, isConnected, publicClient, walletClient, switchChainAsync }),
+    [address, chainId, disconnect, disconnectAsync, isConnected, publicClient, walletClient, switchChainAsync],
+  );
+
+  useEffect(() => {
+    window.riskshield = { ...(window.riskshield || {}), ...live };
+  }, [live]);
+
+  useEffect(() => {
+    if (isConnected && address) {
+      showDashboard(address);
+      refreshOnchainState();
+      return;
+    }
+    showLanding();
+  }, [isConnected, address]);
+
+  useEffect(() => {
+    installDomHandlers();
+    injectLiveDashboardCards();
+    requestAnimationFrame(injectLiveDashboardCards);
+    setTimeout(injectLiveDashboardCards, 0);
+    setTimeout(injectLiveDashboardCards, 250);
+    installFadeObservers();
+    window.calcIL?.();
+    window.updateSwapPreview?.();
+    window.refreshOnchainState = refreshOnchainState;
+    window.injectLiveDashboardCards = injectLiveDashboardCards;
+  }, []);
+
+  return (
+    <>
+      <ConnectButton.Custom>
+        {({ account, chain, openAccountModal, openChainModal, openConnectModal, mounted }) => {
+          window.__riskshieldOpenConnect = openConnectModal;
+          window.__riskshieldOpenAccount = openAccountModal;
+          window.__riskshieldOpenChain = openChainModal;
+          setTimeout(() => {
+            setText("dash-wallet", account?.displayName ?? short(address ?? ""));
+            setText("dash-chain", chain?.name ?? "Unichain Sepolia");
+          }, 0);
+          return <span style={{ display: "none" }} data-mounted={mounted ? "true" : "false"} />;
+        }}
+      </ConnectButton.Custom>
+      <div dangerouslySetInnerHTML={{ __html: riskshieldMarkup }} />
+    </>
+  );
+}
+
+async function ensureReady() {
+  const ctx = window.riskshield || {};
+  if (!ctx.isConnected || !ctx.address) {
+    window.__riskshieldOpenConnect?.();
+    throw new Error("Connect wallet first.");
+  }
+  if (ctx.chainId !== unichainSepolia.id) {
+    await ctx.switchChainAsync?.({ chainId: unichainSepolia.id });
+  }
+  if (!ctx.walletClient || !ctx.publicClient) throw new Error("Wallet client is not ready yet.");
+  return ctx;
+}
+
+async function waitFor(hash, label = "Transaction") {
+  const { publicClient } = window.riskshield;
+  addTxActivity(label, hash, "Pending");
+  toast(`Transaction submitted ${short(hash)}`);
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  addTxActivity(label, hash, receipt.status === "success" ? "Confirmed" : "Reverted");
+  toast(`${label} confirmed ${short(hash)}`);
+  return receipt;
+}
+
+function friendlyError(error) {
+  const message = error?.shortMessage || error?.message || "Transaction failed";
+  if (message.toLowerCase().includes("nonce too low")) {
+    return "Wallet nonce was stale. Wait a few seconds, refresh balances, then retry. The previous transaction may already be confirmed.";
+  }
+  return message;
+}
+
+async function refreshOnchainState() {
+  const ctx = window.riskshield || {};
+  if (!ctx.publicClient) return;
+  injectLiveDashboardCards();
+  try {
+    const [reserve, premium, nextPosition, reserves] = await Promise.all([
+      ctx.publicClient.readContract({
+        address: ADDRESSES.vault,
+        abi: vaultAbi,
+        functionName: "reserveAvailable",
+        args: [POOL_ID],
+      }),
+      ctx.publicClient.readContract({
+        address: ADDRESSES.hook,
+        abi: hookAbi,
+        functionName: "lastPremiumBps",
+        args: [POOL_ID],
+      }),
+      ctx.publicClient.readContract({
+        address: ADDRESSES.vault,
+        abi: vaultAbi,
+        functionName: "nextPositionId",
+      }),
+      ctx.publicClient.readContract({
+        address: ADDRESSES.vault,
+        abi: vaultAbi,
+        functionName: "poolReserves",
+        args: [POOL_ID],
+      }),
+    ]);
+
+    const vaultTokenBalance = await ctx.publicClient.readContract({
+      address: ADDRESSES.mockUSDC,
+      abi: mockTokenAbi,
+      functionName: "balanceOf",
+      args: [ADDRESSES.vault],
+    });
+
+    setText("ov-reserve", fmtUsdc(reserve));
+    setText("j-avail", fmtUsdc(reserve));
+    setText("sw-reserve", fmtUsdc(reserve));
+    setText("ov-premium", `${premium.toString()} bps`);
+    setText("sw-lastbps", `${premium.toString()} bps`);
+    setText("ov-positions", (nextPosition - 1n).toString());
+    setText("j-capital", fmtUsdc(reserves[0]));
+    setText("j-premiums", fmtUsdc(reserves[1]));
+    setText("j-paid", fmtUsdc(reserves[2]));
+    setText("live-vault-token", fmtUsdc(vaultTokenBalance));
+    setText("live-next-position", (nextPosition - 1n).toString());
+    setText("live-pool-id", `${POOL_ID.slice(0, 10)}...${POOL_ID.slice(-8)}`);
+
+    if (ctx.address) {
+      const [junior, nativeBalance, usdcBalance, riskBalance, vaultAllowance, routerUsdcAllowance, routerRiskAllowance] =
+        await Promise.all([
+          ctx.publicClient.readContract({
+            address: ADDRESSES.vault,
+            abi: vaultAbi,
+            functionName: "juniorBalanceOf",
+            args: [POOL_ID, ctx.address],
+          }),
+          ctx.publicClient.getBalance({ address: ctx.address }),
+          ctx.publicClient.readContract({
+            address: ADDRESSES.mockUSDC,
+            abi: mockTokenAbi,
+            functionName: "balanceOf",
+            args: [ctx.address],
+          }),
+          ctx.publicClient.readContract({
+            address: ADDRESSES.mockRiskAsset,
+            abi: mockTokenAbi,
+            functionName: "balanceOf",
+            args: [ctx.address],
+          }),
+          ctx.publicClient.readContract({
+            address: ADDRESSES.mockUSDC,
+            abi: mockTokenAbi,
+            functionName: "allowance",
+            args: [ctx.address, ADDRESSES.vault],
+          }),
+          ctx.publicClient.readContract({
+            address: ADDRESSES.mockUSDC,
+            abi: mockTokenAbi,
+            functionName: "allowance",
+            args: [ctx.address, ADDRESSES.router],
+          }),
+          ctx.publicClient.readContract({
+            address: ADDRESSES.mockRiskAsset,
+            abi: mockTokenAbi,
+            functionName: "allowance",
+            args: [ctx.address, ADDRESSES.router],
+          }),
+        ]);
+      setText("j-balance", fmtUsdc(junior));
+      setText("s-owner", short(ctx.address));
+      setText("dash-wallet", short(ctx.address));
+      setText("live-wallet", short(ctx.address));
+      setText("live-eth", fmtEth(nativeBalance));
+      setText("live-usdc", fmtUsdc(usdcBalance));
+      setText("live-risk", fmtRisk(riskBalance));
+      setText("live-junior", fmtUsdc(junior));
+      setText("live-vault-allowance", fmtAllowance(vaultAllowance, 6, "mUSDC"));
+      setText("live-router-usdc-allowance", fmtAllowance(routerUsdcAllowance, 6, "mUSDC"));
+      setText("live-router-risk-allowance", fmtAllowance(routerRiskAllowance, 18, "mRISK"));
+    }
+  } catch (error) {
+    console.warn(error);
+  }
+}
+
+async function write(address, abi, functionName, args, label = functionName) {
+  if (window.__riskshieldTxInFlight) {
+    throw new Error("A transaction is already pending. Wait for confirmation before submitting the next action.");
+  }
+  window.__riskshieldTxInFlight = true;
+  try {
+    const ctx = await ensureReady();
+    const nonce = await ctx.publicClient.getTransactionCount({
+      address: ctx.address,
+      blockTag: "pending",
+    });
+    const hash = await ctx.walletClient.writeContract({
+      chain: unichainSepolia,
+      account: ctx.address,
+      address,
+      abi,
+      functionName,
+      args,
+      nonce,
+    });
+    await waitFor(hash, label);
+    return hash;
+  } finally {
+    window.__riskshieldTxInFlight = false;
+  }
+}
+
+function installDomHandlers() {
+  window.copyAddr = async (addr) => {
+    await navigator.clipboard?.writeText(addr);
+    toast(`Copied ${short(addr)}`);
+  };
+
+  window.connectWallet = () => {
+    const ctx = window.riskshield || {};
+    if (ctx.isConnected && ctx.address) {
+      showDashboard(ctx.address);
+      refreshOnchainState();
+      return;
+    }
+    window.__riskshieldOpenConnect?.();
+  };
+
+  window.disconnectWallet = async () => {
+    const ctx = window.riskshield || {};
+    try {
+      await ctx.disconnectAsync?.();
+      ctx.disconnect?.();
+    } catch (error) {
+      console.warn(error);
+    }
+    window.riskshield = { ...(window.riskshield || {}), isConnected: false, address: undefined };
+    showLanding();
+    toast("Wallet disconnected");
+  };
+
+  window.showPage = (id, el) => {
+    const titles = {
+      overview: "Overview",
+      junior: "Junior Insurer",
+      senior: "Senior LP",
+      swap: "Swap Premium",
+      coverage: "IL Coverage",
+      deployment: "Deployment",
+    };
+    document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
+    document.querySelectorAll(".nav-item").forEach((n) => n.classList.remove("active"));
+    document.getElementById(`panel-${id}`)?.classList.add("active");
+    el?.classList.add("active");
+    setText("topbar-page-title", titles[id] || id);
+    window.closeSidebar();
+  };
+
+  window.toggleSidebar = () => {
+    document.getElementById("sidebar")?.classList.toggle("open");
+    document.getElementById("sidebarOverlay")?.classList.toggle("show");
+  };
+
+  window.closeSidebar = () => {
+    document.getElementById("sidebar")?.classList.remove("open");
+    document.getElementById("sidebarOverlay")?.classList.remove("show");
+  };
+
+  window.juniorStep = async (n) => {
+    try {
+      const ctx = await ensureReady();
+      const amount = parseUnits(String(getInput("j-amount", 100)), 6);
+      if (n === 1) {
+        markButton("j-btn1", "state-pending", "Submitting...");
+        const hash = await write(ADDRESSES.mockUSDC, mockTokenAbi, "mint", [ctx.address, amount], "Mint mUSDC");
+        markButton("j-btn1", "state-done", "1 Mint MockUSDC done");
+        markDone("jd1");
+        document.getElementById("j-btn2").disabled = false;
+        toast(`Mint confirmed ${short(hash)}`);
+      } else if (n === 2) {
+        markButton("j-btn2", "state-pending", "Submitting...");
+        const hash = await write(
+          ADDRESSES.mockUSDC,
+          mockTokenAbi,
+          "approve",
+          [ADDRESSES.vault, amount],
+          "Approve vault",
+        );
+        markButton("j-btn2", "state-done", "2 Approve RiskShieldVault done");
+        markDone("jd2");
+        document.getElementById("j-btn3").disabled = false;
+        toast(`Approval confirmed ${short(hash)}`);
+      } else {
+        markButton("j-btn3", "state-pending", "Submitting...");
+        const hash = await write(ADDRESSES.vault, vaultAbi, "depositJunior", [POOL_ID, amount], "Deposit junior reserve");
+        markButton("j-btn3", "state-done", "3 Deposit Junior Reserve done");
+        markDone("jd3");
+        setTxLine("jd3-txt", hash);
+        toast(`Junior reserve deposit confirmed ${short(hash)}`);
+      }
+      await refreshOnchainState();
+    } catch (error) {
+      resetPendingButtons();
+      toast(friendlyError(error));
+    }
+  };
+
+  window.seniorStep = async (n) => {
+    try {
+      const ctx = await ensureReady();
+      if (n === 1) {
+        markButton("s-btn1", "state-pending", "Submitting...");
+        const usdcHash = await write(
+          ADDRESSES.mockUSDC,
+          mockTokenAbi,
+          "mint",
+          [ctx.address, parseUnits("10000", 6)],
+          "Mint senior mUSDC",
+        );
+        const riskHash = await write(ADDRESSES.mockRiskAsset, mockTokenAbi, "mint", [
+          ctx.address,
+          parseUnits("10000", 18),
+        ], "Mint senior mRISK");
+        markButton("s-btn1", "state-done", "1 Mint mUSDC + mRISK done");
+        markDone("sd1");
+        document.getElementById("s-btn2").disabled = false;
+        toast(`Mint confirmed ${short(riskHash || usdcHash)}`);
+      } else if (n === 2) {
+        markButton("s-btn2", "state-pending", "Submitting...");
+        await write(ADDRESSES.mockUSDC, mockTokenAbi, "approve", [ADDRESSES.router, maxUint256], "Approve router mUSDC");
+        const hash = await write(
+          ADDRESSES.mockRiskAsset,
+          mockTokenAbi,
+          "approve",
+          [ADDRESSES.router, maxUint256],
+          "Approve router mRISK",
+        );
+        markButton("s-btn2", "state-done", "2 Approve PoolRouter done");
+        markDone("sd2");
+        document.getElementById("s-btn3").disabled = false;
+        toast(`Router approval confirmed ${short(hash)}`);
+      } else {
+        markButton("s-btn3", "state-pending", "Submitting...");
+        const hookData = encodeSeniorHookData(ctx.address);
+        const hash = await write(
+          ADDRESSES.router,
+          routerAbi,
+          "modifyLiquidity",
+          [
+            poolKey,
+            { tickLower: -60, tickUpper: 60, liquidityDelta: 1000000000000n, salt: `0x${"0".repeat(64)}` },
+            hookData,
+          ],
+          "Open senior liquidity",
+        );
+        markButton("s-btn3", "state-done", "3 Senior Position Opened");
+        markDone("sd3");
+        setTxLine("sd3-txt", hash);
+        toast(`Senior position opened ${short(hash)}`);
+      }
+      await refreshOnchainState();
+    } catch (error) {
+      resetPendingButtons();
+      toast(friendlyError(error));
+    }
+  };
+
+  window.updateSwapPreview = () => {
+    const size = getInput("sw-size", 1000);
+    const tick = getInput("sw-tick", 120);
+    const sizePremium = (size * 100) / 1_000_000;
+    const volPremium = tick / 10;
+    const total = Math.min(5 + sizePremium + volPremium, 100);
+    setText("sw-size-prev", `${sizePremium.toFixed(2)} bps`);
+    setText("sw-vol-prev", `${volPremium.toFixed(1)} bps`);
+    setText("sw-total-prev", `${total.toFixed(1)} bps`);
+  };
+
+  window.executeSwap = async () => {
+    try {
+      await ensureReady();
+      const tick = Math.trunc(getInput("sw-tick", 120));
+      const swapSize = parseUnits(String(getInput("sw-size", 1000)), 6);
+      const fund = parseUnits(String(getInput("sw-fund", 10)), 6);
+      markButton("sw-btn", "state-pending", "Executing swap...");
+      await write(ADDRESSES.mockUSDC, mockTokenAbi, "approve", [ADDRESSES.router, maxUint256], "Approve swap mUSDC");
+      const hash = await write(ADDRESSES.router, routerAbi, "swapAndFundPremium", [
+        poolKey,
+        { zeroForOne: true, amountSpecified: -swapSize, sqrtPriceLimitX96: MIN_SQRT_PRICE_PLUS_ONE },
+        encodeTickHookData(tick),
+        fund,
+        POOL_ID,
+      ], "Swap and fund premium");
+      markButton("sw-btn", "state-done", "Swap Executed");
+      toast(`Swap and premium funding confirmed ${short(hash)}`);
+      await refreshOnchainState();
+      setTimeout(() => markButton("sw-btn", "", "Execute v4 Swap + Fund Premium"), 2500);
+    } catch (error) {
+      resetPendingButtons();
+      toast(friendlyError(error));
+    }
+  };
+
+  window.calcIL = () => {
+    const et0 = getInput("il-et0", 1);
+    const et1 = getInput("il-et1", 2000);
+    const xt0 = getInput("il-xt0", 0.5);
+    const xt1 = getInput("il-xt1", 1000);
+    const price = getInput("il-price", 2000);
+    const reserve = getInput("il-reserve", 2000);
+    const capBps = getInput("il-cap", 3000);
+    const holdVal = et0 * price + et1;
+    const exitVal = xt0 * price + xt1;
+    const loss = Math.max(0, holdVal - exitVal);
+    const coverCap = (holdVal * capBps) / 10000;
+    const coverable = Math.min(loss, coverCap, reserve);
+    const remaining = reserve - coverable;
+    const fmt = (v) => `${v.toLocaleString(undefined, { maximumFractionDigits: 2 })} mUSDC`;
+    const cap = document.getElementById("il-cappct");
+    if (cap) cap.value = (capBps / 100).toFixed(0);
+    setText("il-hold", fmt(holdVal));
+    setText("il-exit", fmt(exitVal));
+    setText("il-loss", fmt(loss));
+    setText("il-covercap", fmt(coverCap));
+    setText("il-coverable", fmt(coverable));
+    setText("il-remaining", fmt(remaining));
+    const vanilla = exitVal - holdVal;
+    const shield = exitVal + coverable - holdVal;
+    setText("il-vanilla", `${vanilla >= 0 ? "+" : ""}${fmt(vanilla)}`);
+    setText("il-shield", `${shield >= 0 ? "+" : ""}${fmt(shield)}`);
+  };
+
+  document.addEventListener("input", (event) => {
+    if (event.target?.id?.startsWith("il-")) window.calcIL();
+    if (event.target?.id?.startsWith("sw-")) window.updateSwapPreview();
+  });
+}
+
+function injectLiveDashboardCards() {
+  if (document.getElementById("riskshield-live-metrics")) return;
+  const overview = document.getElementById("panel-overview");
+
+  const metrics = document.createElement("div");
+  metrics.id = "riskshield-live-metrics";
+  metrics.className = "grid-2 live-metrics-grid";
+  metrics.innerHTML = `
+    <div class="card">
+      <div class="card-title">Live Wallet Metrics</div>
+      <div class="data-row"><span class="dr-key">Connected Wallet</span><span class="dr-val" id="live-wallet">Not connected</span></div>
+      <div class="data-row"><span class="dr-key">Gas Balance</span><span class="dr-val" id="live-eth">0 ETH</span></div>
+      <div class="data-row"><span class="dr-key">mUSDC Balance</span><span class="dr-val green" id="live-usdc">0 mUSDC</span></div>
+      <div class="data-row"><span class="dr-key">mRISK Balance</span><span class="dr-val" id="live-risk">0 mRISK</span></div>
+      <div class="data-row"><span class="dr-key">Junior Shares</span><span class="dr-val" id="live-junior">0 mUSDC</span></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Live Protocol Metrics</div>
+      <div class="data-row"><span class="dr-key">Vault Token Balance</span><span class="dr-val green" id="live-vault-token">0 mUSDC</span></div>
+      <div class="data-row"><span class="dr-key">Vault Allowance</span><span class="dr-val" id="live-vault-allowance">0 mUSDC</span></div>
+      <div class="data-row"><span class="dr-key">Router mUSDC Allowance</span><span class="dr-val" id="live-router-usdc-allowance">0 mUSDC</span></div>
+      <div class="data-row"><span class="dr-key">Router mRISK Allowance</span><span class="dr-val" id="live-router-risk-allowance">0 mRISK</span></div>
+      <div class="data-row"><span class="dr-key">Senior Positions</span><span class="dr-val" id="live-next-position">0</span></div>
+      <div class="data-row"><span class="dr-key">Pool ID</span><span class="dr-val" id="live-pool-id">0xf7ab8f...</span></div>
+    </div>
+  `;
+
+  const activity = document.createElement("div");
+  activity.id = "riskshield-tx-activity";
+  activity.className = "card tx-activity-card";
+  activity.innerHTML = `
+    <div class="card-title">Confirmed Transaction Activity</div>
+    <div class="card-sub">Every wallet action appears here with a Uniscan link after submission and confirmation.</div>
+    <div id="tx-activity-list" class="tx-activity-list">
+      <div class="tx-empty">No wallet transactions in this browser session yet.</div>
+    </div>
+  `;
+
+  overview?.append(metrics);
+  overview?.append(activity);
+}
+
+function installFadeObservers() {
+  const nodes = Array.from(document.querySelectorAll(".fade-up"));
+  if (!nodes.length) return;
+
+  if (!("IntersectionObserver" in window)) {
+    nodes.forEach((node) => node.classList.add("in"));
+    return;
+  }
+
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("in");
+          observer.unobserve(entry.target);
+        }
+      });
+    },
+    { threshold: 0.08 },
+  );
+
+  nodes.forEach((node) => observer.observe(node));
+  requestAnimationFrame(() => {
+    nodes.slice(0, 4).forEach((node) => node.classList.add("in"));
+  });
+}
+
+function resetPendingButtons() {
+  document.querySelectorAll(".state-pending").forEach((btn) => {
+    btn.classList.remove("state-pending");
+    btn.disabled = false;
+  });
+}
+
+function showDashboard(address) {
+  injectLiveDashboardCards();
+  const landing = document.getElementById("page-landing");
+  const dashboard = document.getElementById("page-dashboard");
+  if (landing && dashboard) {
+    landing.style.display = "none";
+    dashboard.style.display = "block";
+    window.scrollTo(0, 0);
+  }
+  setText("dash-wallet", short(address));
+  setText("dash-chain", "Unichain Sepolia");
+  toast(`Wallet connected ${short(address)}`);
+}
+
+function showLanding() {
+  const landing = document.getElementById("page-landing");
+  const dashboard = document.getElementById("page-dashboard");
+  if (landing && dashboard) {
+    dashboard.style.display = "none";
+    landing.style.display = "block";
+    window.scrollTo(0, 0);
+  }
+  setText("dash-wallet", "Not connected");
+  setText("dash-chain", "Unichain Sepolia");
+}
+
+createRoot(document.getElementById("app")).render(
+  <React.StrictMode>
+    <WagmiProvider config={config}>
+      <QueryClientProvider client={queryClient}>
+        <RainbowKitProvider>
+          <RiskShieldShell />
+        </RainbowKitProvider>
+      </QueryClientProvider>
+    </WagmiProvider>
+  </React.StrictMode>,
+);

@@ -9,8 +9,13 @@
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
+    "@rainbow-me/rainbowkit": "^2.2.11",
+    "@tanstack/react-query": "^5.100.14",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
     "solc": "^0.8.35",
     "viem": "^2.51.3",
-    "vite": "^8.0.14"
+    "vite": "^8.0.14",
+    "wagmi": "^2.19.5"
   }
 }
