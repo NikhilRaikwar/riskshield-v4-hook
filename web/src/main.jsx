@@ -20,16 +20,32 @@ import { unichainSepolia } from "wagmi/chains";
 import { encodeAbiParameters, erc20Abi, formatEther, formatUnits, maxUint256, parseUnits } from "viem";
 import { riskshieldMarkup } from "./riskshieldMarkup.js";
 
-const ADDRESSES = {
+const MOCK_DEPLOYMENT = {
   poolManager: "0x00B036B58a818B1BC34d502D3fE730Db729e62AC",
   mockUSDC: "0xb0cD9Ec340036f47F4655d9BBfE1E172E3209A06",
   mockRiskAsset: "0x72290EB00a06c4a5582c64e8E336F6e4D242bE87",
   vault: "0xAE2fbD03F210206774BD2A43Bc96823a18022a5f",
   hook: "0xd9E54DB85EC7BbBFbFE1d47fae90b941aA4aC7C0",
   router: "0x11fB0B3C8355fF826a3BC9316ea5B0A46E2FF0C0",
+  poolId: "0xf7ab8f4eeb4e9ae1a8bf02a06f9d65aeeabefe42d29c38473c354eaaad1d4ba5",
 };
 
-const POOL_ID = "0xf7ab8f4eeb4e9ae1a8bf02a06f9d65aeeabefe42d29c38473c354eaaad1d4ba5";
+const REAL_USDC_DEPLOYMENT = {
+  poolManager: MOCK_DEPLOYMENT.poolManager,
+  mockUSDC: import.meta.env.VITE_RISKSHIELD_USDC || "0x31d0220469e10c4E71834a79b1f276d740d3768F",
+  mockRiskAsset: import.meta.env.VITE_RISKSHIELD_RISK_ASSET || MOCK_DEPLOYMENT.mockRiskAsset,
+  vault: import.meta.env.VITE_RISKSHIELD_VAULT || MOCK_DEPLOYMENT.vault,
+  hook: import.meta.env.VITE_RISKSHIELD_HOOK || MOCK_DEPLOYMENT.hook,
+  router: import.meta.env.VITE_RISKSHIELD_ROUTER || MOCK_DEPLOYMENT.router,
+  poolId: import.meta.env.VITE_RISKSHIELD_POOL_ID || MOCK_DEPLOYMENT.poolId,
+};
+
+const IS_REAL_USDC_MODE = import.meta.env.VITE_RISKSHIELD_MODE === "real-usdc";
+const ADDRESSES = IS_REAL_USDC_MODE ? REAL_USDC_DEPLOYMENT : MOCK_DEPLOYMENT;
+const POOL_ID = ADDRESSES.poolId;
+const STATE_VIEW = import.meta.env.VITE_RISKSHIELD_STATE_VIEW || "0xc199F1072a74D4e905ABa1A84d9a45E2546B6222";
+const RESERVE_SYMBOL = IS_REAL_USDC_MODE ? "USDC" : "mUSDC";
+const RESERVE_NAME = IS_REAL_USDC_MODE ? "Circle testnet USDC" : "MockUSDC";
 const MIN_SQRT_PRICE_PLUS_ONE = 4295128740n;
 
 const poolKey = {
@@ -110,6 +126,28 @@ const hookAbi = [
     stateMutability: "view",
     inputs: [{ name: "poolId", type: "bytes32" }],
     outputs: [{ type: "uint256" }],
+  },
+];
+
+const stateViewAbi = [
+  {
+    type: "function",
+    name: "getSlot0",
+    stateMutability: "view",
+    inputs: [{ name: "poolId", type: "bytes32" }],
+    outputs: [
+      { name: "sqrtPriceX96", type: "uint160" },
+      { name: "tick", type: "int24" },
+      { name: "protocolFee", type: "uint24" },
+      { name: "lpFee", type: "uint24" },
+    ],
+  },
+  {
+    type: "function",
+    name: "getLiquidity",
+    stateMutability: "view",
+    inputs: [{ name: "poolId", type: "bytes32" }],
+    outputs: [{ type: "uint128" }],
   },
 ];
 
@@ -223,7 +261,7 @@ function short(value) {
 function fmtUsdc(value) {
   return `${Number(formatUnits(value ?? 0n, 6)).toLocaleString(undefined, {
     maximumFractionDigits: 2,
-  })} mUSDC`;
+  })} ${RESERVE_SYMBOL}`;
 }
 
 function fmtRisk(value) {
@@ -273,6 +311,31 @@ function toast(msg, duration = 3600) {
 function setText(id, value) {
   const el = document.getElementById(id);
   if (el) el.textContent = value;
+}
+
+function applyDeploymentModeText() {
+  document.querySelectorAll("[data-reserve-symbol]").forEach((el) => {
+    el.textContent = RESERVE_SYMBOL;
+  });
+  document.querySelectorAll("[data-reserve-name]").forEach((el) => {
+    el.textContent = RESERVE_NAME;
+  });
+  setText("deployment-mode-label", IS_REAL_USDC_MODE ? "Real USDC Mode" : "Mock Demo Mode");
+  setText("j-btn1", IS_REAL_USDC_MODE ? "1 Check USDC Balance" : "1 Mint MockUSDC");
+  setText("s-btn1", IS_REAL_USDC_MODE ? "1 Mint mRISK" : "1 Mint mUSDC + mRISK");
+  setText("junior-step-mint-label", IS_REAL_USDC_MODE ? "Check wallet USDC balance" : "Mint mUSDC to connected wallet");
+  setText(
+    "junior-card-copy",
+    IS_REAL_USDC_MODE
+      ? "Deposit Circle testnet USDC as first-loss insurance capital. Get faucet USDC first, then approve and deposit."
+      : "Deposit MockUSDC as first-loss insurance capital. Your capital absorbs covered losses before senior LPs are impacted.",
+  );
+  setText(
+    "senior-card-copy",
+    IS_REAL_USDC_MODE
+      ? "Mint demo mRISK, then pair it with real testnet USDC. The hook records your protected entry when liquidity is added."
+      : "Your position is benchmarked at entry price. On exit, the vault compares your actual LP value against the hold benchmark and pays covered IL from the reserve.",
+  );
 }
 
 function getInput(id, fallback) {
@@ -377,6 +440,7 @@ function RiskShieldShell() {
   useEffect(() => {
     installDomHandlers();
     injectLiveDashboardCards();
+    applyDeploymentModeText();
     requestAnimationFrame(injectLiveDashboardCards);
     setTimeout(injectLiveDashboardCards, 0);
     setTimeout(injectLiveDashboardCards, 250);
@@ -488,6 +552,31 @@ async function refreshOnchainState() {
     setText("live-next-position", (nextPosition - 1n).toString());
     setText("live-pool-id", `${POOL_ID.slice(0, 10)}...${POOL_ID.slice(-8)}`);
 
+    try {
+      const [slot0, liquidity] = await Promise.all([
+        ctx.publicClient.readContract({
+          address: STATE_VIEW,
+          abi: stateViewAbi,
+          functionName: "getSlot0",
+          args: [POOL_ID],
+        }),
+        ctx.publicClient.readContract({
+          address: STATE_VIEW,
+          abi: stateViewAbi,
+          functionName: "getLiquidity",
+          args: [POOL_ID],
+        }),
+      ]);
+      setText("live-pool-tick", slot0[1].toString());
+      setText("live-pool-liquidity", liquidity.toString());
+      setText("live-pool-lp-fee", `${slot0[3].toString()} pips`);
+    } catch (stateError) {
+      console.warn(stateError);
+      setText("live-pool-tick", "Unavailable");
+      setText("live-pool-liquidity", "Unavailable");
+      setText("live-pool-lp-fee", "Unavailable");
+    }
+
     if (ctx.address) {
       const [junior, nativeBalance, usdcBalance, riskBalance, vaultAllowance, routerUsdcAllowance, routerRiskAllowance] =
         await Promise.all([
@@ -537,8 +626,8 @@ async function refreshOnchainState() {
       setText("live-usdc", fmtUsdc(usdcBalance));
       setText("live-risk", fmtRisk(riskBalance));
       setText("live-junior", fmtUsdc(junior));
-      setText("live-vault-allowance", fmtAllowance(vaultAllowance, 6, "mUSDC"));
-      setText("live-router-usdc-allowance", fmtAllowance(routerUsdcAllowance, 6, "mUSDC"));
+      setText("live-vault-allowance", fmtAllowance(vaultAllowance, 6, RESERVE_SYMBOL));
+      setText("live-router-usdc-allowance", fmtAllowance(routerUsdcAllowance, 6, RESERVE_SYMBOL));
       setText("live-router-risk-allowance", fmtAllowance(routerRiskAllowance, 18, "mRISK"));
     }
   } catch (error) {
@@ -634,12 +723,17 @@ function installDomHandlers() {
       const ctx = await ensureReady();
       const amount = parseUnits(String(getInput("j-amount", 100)), 6);
       if (n === 1) {
-        markButton("j-btn1", "state-pending", "Submitting...");
-        const hash = await write(ADDRESSES.mockUSDC, mockTokenAbi, "mint", [ctx.address, amount], "Mint mUSDC");
-        markButton("j-btn1", "state-done", "1 Mint MockUSDC done");
+        if (IS_REAL_USDC_MODE) {
+          markButton("j-btn1", "state-done", "1 USDC Balance Checked");
+          toast("Use Circle faucet USDC, then approve and deposit.");
+        } else {
+          markButton("j-btn1", "state-pending", "Submitting...");
+          const hash = await write(ADDRESSES.mockUSDC, mockTokenAbi, "mint", [ctx.address, amount], "Mint mUSDC");
+          markButton("j-btn1", "state-done", "1 Mint MockUSDC done");
+          toast(`Mint confirmed ${short(hash)}`);
+        }
         markDone("jd1");
         document.getElementById("j-btn2").disabled = false;
-        toast(`Mint confirmed ${short(hash)}`);
       } else if (n === 2) {
         markButton("j-btn2", "state-pending", "Submitting...");
         const hash = await write(
@@ -673,18 +767,21 @@ function installDomHandlers() {
       const ctx = await ensureReady();
       if (n === 1) {
         markButton("s-btn1", "state-pending", "Submitting...");
-        const usdcHash = await write(
-          ADDRESSES.mockUSDC,
-          mockTokenAbi,
-          "mint",
-          [ctx.address, parseUnits("10000", 6)],
-          "Mint senior mUSDC",
-        );
+        let usdcHash;
+        if (!IS_REAL_USDC_MODE) {
+          usdcHash = await write(
+            ADDRESSES.mockUSDC,
+            mockTokenAbi,
+            "mint",
+            [ctx.address, parseUnits("10000", 6)],
+            "Mint senior mUSDC",
+          );
+        }
         const riskHash = await write(ADDRESSES.mockRiskAsset, mockTokenAbi, "mint", [
           ctx.address,
           parseUnits("10000", 18),
         ], "Mint senior mRISK");
-        markButton("s-btn1", "state-done", "1 Mint mUSDC + mRISK done");
+        markButton("s-btn1", "state-done", IS_REAL_USDC_MODE ? "1 Mint mRISK done" : "1 Mint mUSDC + mRISK done");
         markDone("sd1");
         document.getElementById("s-btn2").disabled = false;
         toast(`Mint confirmed ${short(riskHash || usdcHash)}`);
@@ -778,7 +875,7 @@ function installDomHandlers() {
     const coverCap = (holdVal * capBps) / 10000;
     const coverable = Math.min(loss, coverCap, reserve);
     const remaining = reserve - coverable;
-    const fmt = (v) => `${v.toLocaleString(undefined, { maximumFractionDigits: 2 })} mUSDC`;
+    const fmt = (v) => `${v.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${RESERVE_SYMBOL}`;
     const cap = document.getElementById("il-cappct");
     if (cap) cap.value = (capBps / 100).toFixed(0);
     setText("il-hold", fmt(holdVal));
@@ -811,18 +908,21 @@ function injectLiveDashboardCards() {
       <div class="card-title">Live Wallet Metrics</div>
       <div class="data-row"><span class="dr-key">Connected Wallet</span><span class="dr-val" id="live-wallet">Not connected</span></div>
       <div class="data-row"><span class="dr-key">Gas Balance</span><span class="dr-val" id="live-eth">0 ETH</span></div>
-      <div class="data-row"><span class="dr-key">mUSDC Balance</span><span class="dr-val green" id="live-usdc">0 mUSDC</span></div>
+      <div class="data-row"><span class="dr-key">${RESERVE_SYMBOL} Balance</span><span class="dr-val green" id="live-usdc">0 ${RESERVE_SYMBOL}</span></div>
       <div class="data-row"><span class="dr-key">mRISK Balance</span><span class="dr-val" id="live-risk">0 mRISK</span></div>
-      <div class="data-row"><span class="dr-key">Junior Shares</span><span class="dr-val" id="live-junior">0 mUSDC</span></div>
+      <div class="data-row"><span class="dr-key">Junior Shares</span><span class="dr-val" id="live-junior">0 ${RESERVE_SYMBOL}</span></div>
     </div>
     <div class="card">
       <div class="card-title">Live Protocol Metrics</div>
-      <div class="data-row"><span class="dr-key">Vault Token Balance</span><span class="dr-val green" id="live-vault-token">0 mUSDC</span></div>
-      <div class="data-row"><span class="dr-key">Vault Allowance</span><span class="dr-val" id="live-vault-allowance">0 mUSDC</span></div>
-      <div class="data-row"><span class="dr-key">Router mUSDC Allowance</span><span class="dr-val" id="live-router-usdc-allowance">0 mUSDC</span></div>
+      <div class="data-row"><span class="dr-key">Vault Token Balance</span><span class="dr-val green" id="live-vault-token">0 ${RESERVE_SYMBOL}</span></div>
+      <div class="data-row"><span class="dr-key">Vault Allowance</span><span class="dr-val" id="live-vault-allowance">0 ${RESERVE_SYMBOL}</span></div>
+      <div class="data-row"><span class="dr-key">Router ${RESERVE_SYMBOL} Allowance</span><span class="dr-val" id="live-router-usdc-allowance">0 ${RESERVE_SYMBOL}</span></div>
       <div class="data-row"><span class="dr-key">Router mRISK Allowance</span><span class="dr-val" id="live-router-risk-allowance">0 mRISK</span></div>
       <div class="data-row"><span class="dr-key">Senior Positions</span><span class="dr-val" id="live-next-position">0</span></div>
       <div class="data-row"><span class="dr-key">Pool ID</span><span class="dr-val" id="live-pool-id">0xf7ab8f...</span></div>
+      <div class="data-row"><span class="dr-key">Pool Tick</span><span class="dr-val" id="live-pool-tick">Loading</span></div>
+      <div class="data-row"><span class="dr-key">Pool Liquidity</span><span class="dr-val" id="live-pool-liquidity">Loading</span></div>
+      <div class="data-row"><span class="dr-key">LP Fee</span><span class="dr-val" id="live-pool-lp-fee">Loading</span></div>
     </div>
   `;
 
