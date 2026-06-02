@@ -33,11 +33,11 @@ const MOCK_DEPLOYMENT = {
 const REAL_USDC_DEPLOYMENT = {
   poolManager: MOCK_DEPLOYMENT.poolManager,
   mockUSDC: import.meta.env.VITE_RISKSHIELD_USDC || "0x31d0220469e10c4E71834a79b1f276d740d3768F",
-  mockRiskAsset: import.meta.env.VITE_RISKSHIELD_RISK_ASSET || MOCK_DEPLOYMENT.mockRiskAsset,
-  vault: import.meta.env.VITE_RISKSHIELD_VAULT || MOCK_DEPLOYMENT.vault,
-  hook: import.meta.env.VITE_RISKSHIELD_HOOK || MOCK_DEPLOYMENT.hook,
-  router: import.meta.env.VITE_RISKSHIELD_ROUTER || MOCK_DEPLOYMENT.router,
-  poolId: import.meta.env.VITE_RISKSHIELD_POOL_ID || MOCK_DEPLOYMENT.poolId,
+  mockRiskAsset: import.meta.env.VITE_RISKSHIELD_RISK_ASSET || "0x0ca086118b4d1ff6599b75d9f14defbc3242ab78",
+  vault: import.meta.env.VITE_RISKSHIELD_VAULT || "0xe12b741707eb4b9a8762d58c2e36b909e345d5e4",
+  hook: import.meta.env.VITE_RISKSHIELD_HOOK || "0x49026475bca9C0FDD778dDF143E7a596b4D6C7C0",
+  router: import.meta.env.VITE_RISKSHIELD_ROUTER || "0xb4c8d25afac20572347977e9dc1d18c61d58c736",
+  poolId: import.meta.env.VITE_RISKSHIELD_POOL_ID || "0xb0dda0a853ae4eefb5ed690dc7de5cfefe01ef3572152e0170db69c3e57f71c4",
 };
 
 const IS_REAL_USDC_MODE = import.meta.env.VITE_RISKSHIELD_MODE === "real-usdc";
@@ -47,14 +47,23 @@ const STATE_VIEW = import.meta.env.VITE_RISKSHIELD_STATE_VIEW || "0xc199F1072a74
 const RESERVE_SYMBOL = IS_REAL_USDC_MODE ? "USDC" : "mUSDC";
 const RESERVE_NAME = IS_REAL_USDC_MODE ? "Circle testnet USDC" : "MockUSDC";
 const MIN_SQRT_PRICE_PLUS_ONE = 4295128740n;
+const MAX_SQRT_PRICE_MINUS_ONE = 1461446703485210103287273052203988822378723970341n;
+const SQRT_PRICE_TICK_NEG_30 = 79109415290437042302807587396n;
+const SQRT_PRICE_TICK_30 = 79347087983666005045280518415n;
+
+const [currency0, currency1] =
+  BigInt(ADDRESSES.mockRiskAsset) < BigInt(ADDRESSES.mockUSDC)
+    ? [ADDRESSES.mockRiskAsset, ADDRESSES.mockUSDC]
+    : [ADDRESSES.mockUSDC, ADDRESSES.mockRiskAsset];
 
 const poolKey = {
-  currency0: ADDRESSES.mockRiskAsset,
-  currency1: ADDRESSES.mockUSDC,
+  currency0,
+  currency1,
   fee: 8388608,
   tickSpacing: 60,
   hooks: ADDRESSES.hook,
 };
+const RISK_IS_CURRENCY0 = currency0.toLowerCase() === ADDRESSES.mockRiskAsset.toLowerCase();
 
 const vaultAbi = [
   {
@@ -65,7 +74,7 @@ const vaultAbi = [
       { name: "poolId", type: "bytes32" },
       { name: "amount", type: "uint256" },
     ],
-    outputs: [],
+    outputs: [{ name: "shares", type: "uint256" }],
   },
   {
     type: "function",
@@ -82,6 +91,27 @@ const vaultAbi = [
       { name: "poolId", type: "bytes32" },
       { name: "account", type: "address" },
     ],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "juniorSharePrice",
+    stateMutability: "view",
+    inputs: [{ name: "poolId", type: "bytes32" }],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "activeProtectedLiability",
+    stateMutability: "view",
+    inputs: [{ name: "poolId", type: "bytes32" }],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "withdrawableReserve",
+    stateMutability: "view",
+    inputs: [{ name: "poolId", type: "bytes32" }],
     outputs: [{ type: "uint256" }],
   },
   {
@@ -114,6 +144,7 @@ const vaultAbi = [
       { name: "entryAmount1", type: "uint256" },
       { name: "entryPriceWad", type: "uint256" },
       { name: "liquidity", type: "uint256" },
+      { name: "coverageLiability", type: "uint256" },
       { name: "closed", type: "bool" },
     ],
   },
@@ -123,6 +154,13 @@ const hookAbi = [
   {
     type: "function",
     name: "lastPremiumBps",
+    stateMutability: "view",
+    inputs: [{ name: "poolId", type: "bytes32" }],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "lastPremiumAmount",
     stateMutability: "view",
     inputs: [{ name: "poolId", type: "bytes32" }],
     outputs: [{ type: "uint256" }],
@@ -230,6 +268,73 @@ const routerAbi = [
     ],
     outputs: [{ name: "delta", type: "int256" }],
   },
+  {
+    type: "function",
+    name: "quotePremium",
+    stateMutability: "view",
+    inputs: [
+      {
+        name: "key",
+        type: "tuple",
+        components: [
+          { name: "currency0", type: "address" },
+          { name: "currency1", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "tickSpacing", type: "int24" },
+          { name: "hooks", type: "address" },
+        ],
+      },
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "zeroForOne", type: "bool" },
+          { name: "amountSpecified", type: "int256" },
+          { name: "sqrtPriceLimitX96", type: "uint160" },
+        ],
+      },
+      { name: "hookData", type: "bytes" },
+      { name: "premiumBaseAmount", type: "uint256" },
+    ],
+    outputs: [
+      { name: "premiumBps", type: "uint256" },
+      { name: "premiumAmount", type: "uint256" },
+    ],
+  },
+  {
+    type: "function",
+    name: "swapAndPayPremium",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "key",
+        type: "tuple",
+        components: [
+          { name: "currency0", type: "address" },
+          { name: "currency1", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "tickSpacing", type: "int24" },
+          { name: "hooks", type: "address" },
+        ],
+      },
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "zeroForOne", type: "bool" },
+          { name: "amountSpecified", type: "int256" },
+          { name: "sqrtPriceLimitX96", type: "uint160" },
+        ],
+      },
+      { name: "hookData", type: "bytes" },
+      { name: "premiumBaseAmount", type: "uint256" },
+      { name: "premiumPoolId", type: "bytes32" },
+    ],
+    outputs: [
+      { name: "delta", type: "int256" },
+      { name: "premiumAmount", type: "uint256" },
+    ],
+  },
 ];
 
 const connectors = connectorsForWallets([
@@ -336,6 +441,12 @@ function applyDeploymentModeText() {
       ? "Mint demo mRISK, then pair it with real testnet USDC. The hook records your protected entry when liquidity is added."
       : "Your position is benchmarked at entry price. On exit, the vault compares your actual LP value against the hold benchmark and pays covered IL from the reserve.",
   );
+  if (IS_REAL_USDC_MODE) {
+    const swapSize = document.getElementById("sw-size");
+    const premiumBase = document.getElementById("sw-fund");
+    if (swapSize && swapSize.value === "1000") swapSize.value = "0.001";
+    if (premiumBase && premiumBase.value === "1000") premiumBase.value = "0.01";
+  }
 }
 
 function getInput(id, fallback) {
@@ -506,7 +617,8 @@ async function refreshOnchainState() {
   if (!ctx.publicClient) return;
   injectLiveDashboardCards();
   try {
-    const [reserve, premium, nextPosition, reserves] = await Promise.all([
+    const [reserve, premium, lastPremiumAmount, nextPosition, reserves, juniorSharePrice, activeLiability, withdrawableReserve] =
+      await Promise.all([
       ctx.publicClient.readContract({
         address: ADDRESSES.vault,
         abi: vaultAbi,
@@ -520,6 +632,12 @@ async function refreshOnchainState() {
         args: [POOL_ID],
       }),
       ctx.publicClient.readContract({
+        address: ADDRESSES.hook,
+        abi: hookAbi,
+        functionName: "lastPremiumAmount",
+        args: [POOL_ID],
+      }),
+      ctx.publicClient.readContract({
         address: ADDRESSES.vault,
         abi: vaultAbi,
         functionName: "nextPositionId",
@@ -528,6 +646,24 @@ async function refreshOnchainState() {
         address: ADDRESSES.vault,
         abi: vaultAbi,
         functionName: "poolReserves",
+        args: [POOL_ID],
+      }),
+      ctx.publicClient.readContract({
+        address: ADDRESSES.vault,
+        abi: vaultAbi,
+        functionName: "juniorSharePrice",
+        args: [POOL_ID],
+      }),
+      ctx.publicClient.readContract({
+        address: ADDRESSES.vault,
+        abi: vaultAbi,
+        functionName: "activeProtectedLiability",
+        args: [POOL_ID],
+      }),
+      ctx.publicClient.readContract({
+        address: ADDRESSES.vault,
+        abi: vaultAbi,
+        functionName: "withdrawableReserve",
         args: [POOL_ID],
       }),
     ]);
@@ -544,11 +680,21 @@ async function refreshOnchainState() {
     setText("sw-reserve", fmtUsdc(reserve));
     setText("ov-premium", `${premium.toString()} bps`);
     setText("sw-lastbps", `${premium.toString()} bps`);
+    setText("sw-paid-live", fmtUsdc(lastPremiumAmount));
     setText("ov-positions", (nextPosition - 1n).toString());
     setText("j-capital", fmtUsdc(reserves[0]));
     setText("j-premiums", fmtUsdc(reserves[1]));
     setText("j-paid", fmtUsdc(reserves[2]));
+    setText("j-share-price", Number(formatUnits(juniorSharePrice, 18)).toLocaleString(undefined, { maximumFractionDigits: 4 }));
+    setText("j-active-liability", fmtUsdc(activeLiability));
+    setText("j-withdrawable", fmtUsdc(withdrawableReserve));
     setText("live-vault-token", fmtUsdc(vaultTokenBalance));
+    setText("live-active-liability", fmtUsdc(activeLiability));
+    setText("live-withdrawable-reserve", fmtUsdc(withdrawableReserve));
+    setText(
+      "live-junior-share-price",
+      Number(formatUnits(juniorSharePrice, 18)).toLocaleString(undefined, { maximumFractionDigits: 4 }),
+    );
     setText("live-next-position", (nextPosition - 1n).toString());
     setText("live-pool-id", `${POOL_ID.slice(0, 10)}...${POOL_ID.slice(-8)}`);
 
@@ -828,33 +974,60 @@ function installDomHandlers() {
   window.updateSwapPreview = () => {
     const size = getInput("sw-size", 1000);
     const tick = getInput("sw-tick", 120);
+    const premiumBase = getInput("sw-fund", 1000);
     const sizePremium = (size * 100) / 1_000_000;
     const volPremium = tick / 10;
     const total = Math.min(5 + sizePremium + volPremium, 100);
     setText("sw-size-prev", `${sizePremium.toFixed(2)} bps`);
     setText("sw-vol-prev", `${volPremium.toFixed(1)} bps`);
     setText("sw-total-prev", `${total.toFixed(1)} bps`);
+    setText("sw-paid-preview", `${((premiumBase * total) / 10_000).toLocaleString(undefined, { maximumFractionDigits: 4 })} ${RESERVE_SYMBOL}`);
   };
 
   window.executeSwap = async () => {
     try {
       await ensureReady();
       const tick = Math.trunc(getInput("sw-tick", 120));
-      const swapSize = parseUnits(String(getInput("sw-size", 1000)), 6);
-      const fund = parseUnits(String(getInput("sw-fund", 10)), 6);
+      const swapInput = getInput("sw-size", IS_REAL_USDC_MODE ? 0.001 : 1000);
+      const swapSize = IS_REAL_USDC_MODE ? parseUnits(String(swapInput), 18) : parseUnits(String(swapInput), 6);
+      const premiumBase = parseUnits(String(getInput("sw-fund", IS_REAL_USDC_MODE ? 0.01 : 1000)), 6);
+      const zeroForOne = IS_REAL_USDC_MODE ? RISK_IS_CURRENCY0 : true;
+      const swapParams = {
+        zeroForOne,
+        amountSpecified: -swapSize,
+        sqrtPriceLimitX96: IS_REAL_USDC_MODE
+          ? zeroForOne
+            ? SQRT_PRICE_TICK_NEG_30
+            : SQRT_PRICE_TICK_30
+          : zeroForOne
+            ? MIN_SQRT_PRICE_PLUS_ONE
+            : MAX_SQRT_PRICE_MINUS_ONE,
+      };
+      const hookData = encodeTickHookData(tick);
       markButton("sw-btn", "state-pending", "Executing swap...");
-      await write(ADDRESSES.mockUSDC, mockTokenAbi, "approve", [ADDRESSES.router, maxUint256], "Approve swap mUSDC");
-      const hash = await write(ADDRESSES.router, routerAbi, "swapAndFundPremium", [
+      if (IS_REAL_USDC_MODE) {
+        await write(ADDRESSES.mockRiskAsset, mockTokenAbi, "approve", [ADDRESSES.router, maxUint256], "Approve swap mRISK");
+      }
+      await write(ADDRESSES.mockUSDC, mockTokenAbi, "approve", [ADDRESSES.router, maxUint256], "Approve premium USDC");
+      const [premiumBps, premiumAmount] = await window.riskshield.publicClient.readContract({
+        address: ADDRESSES.router,
+        abi: routerAbi,
+        functionName: "quotePremium",
+        args: [poolKey, swapParams, hookData, premiumBase],
+      });
+      setText("sw-total-prev", `${premiumBps.toString()} bps`);
+      setText("sw-paid-preview", fmtUsdc(premiumAmount));
+      const hash = await write(ADDRESSES.router, routerAbi, "swapAndPayPremium", [
         poolKey,
-        { zeroForOne: true, amountSpecified: -swapSize, sqrtPriceLimitX96: MIN_SQRT_PRICE_PLUS_ONE },
-        encodeTickHookData(tick),
-        fund,
+        swapParams,
+        hookData,
+        premiumBase,
         POOL_ID,
-      ], "Swap and fund premium");
+      ], "Swap and pay premium");
       markButton("sw-btn", "state-done", "Swap Executed");
-      toast(`Swap and premium funding confirmed ${short(hash)}`);
+      toast(`Swap premium paid ${fmtUsdc(premiumAmount)} at ${premiumBps.toString()} bps: ${short(hash)}`);
       await refreshOnchainState();
-      setTimeout(() => markButton("sw-btn", "", "Execute v4 Swap + Fund Premium"), 2500);
+      setTimeout(() => markButton("sw-btn", "", "Execute v4 Swap + Pay Premium"), 2500);
     } catch (error) {
       resetPendingButtons();
       toast(friendlyError(error));
@@ -918,6 +1091,9 @@ function injectLiveDashboardCards() {
       <div class="data-row"><span class="dr-key">Vault Allowance</span><span class="dr-val" id="live-vault-allowance">0 ${RESERVE_SYMBOL}</span></div>
       <div class="data-row"><span class="dr-key">Router ${RESERVE_SYMBOL} Allowance</span><span class="dr-val" id="live-router-usdc-allowance">0 ${RESERVE_SYMBOL}</span></div>
       <div class="data-row"><span class="dr-key">Router mRISK Allowance</span><span class="dr-val" id="live-router-risk-allowance">0 mRISK</span></div>
+      <div class="data-row"><span class="dr-key">Active Liability</span><span class="dr-val" id="live-active-liability">0 ${RESERVE_SYMBOL}</span></div>
+      <div class="data-row"><span class="dr-key">Withdrawable Reserve</span><span class="dr-val" id="live-withdrawable-reserve">0 ${RESERVE_SYMBOL}</span></div>
+      <div class="data-row"><span class="dr-key">Junior Share Price</span><span class="dr-val" id="live-junior-share-price">1.0000</span></div>
       <div class="data-row"><span class="dr-key">Senior Positions</span><span class="dr-val" id="live-next-position">0</span></div>
       <div class="data-row"><span class="dr-key">Pool ID</span><span class="dr-val" id="live-pool-id">0xf7ab8f...</span></div>
       <div class="data-row"><span class="dr-key">Pool Tick</span><span class="dr-val" id="live-pool-tick">Loading</span></div>

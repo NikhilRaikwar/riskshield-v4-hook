@@ -49,6 +49,7 @@ contract RiskShieldV4IntegrationTest {
         hook = RiskShieldHook(deployer.deploy(salt, initCode));
         vault.setHook(address(hook));
         router = new RiskShieldPoolRouter(manager, vault);
+        vault.setRouter(address(router), true);
 
         (Currency currency0, Currency currency1) = address(risk) < address(usdc)
             ? (Currency.wrap(address(risk)), Currency.wrap(address(usdc)))
@@ -77,6 +78,8 @@ contract RiskShieldV4IntegrationTest {
 
         risk.mint(address(this), 10_000 ether);
         usdc.mint(address(this), 10_000_000 * USDC);
+        usdc.approve(address(vault), type(uint256).max);
+        vault.depositJunior(PoolId.unwrap(key.toId()), 1_000_000 * USDC);
         risk.approve(address(router), type(uint256).max);
         usdc.approve(address(router), type(uint256).max);
 
@@ -88,7 +91,7 @@ contract RiskShieldV4IntegrationTest {
             abi.encode(uint8(1), address(this), 1 ether, 2_000 * USDC, 2_000e18)
         );
 
-        (, address owner,,,,,) = vault.seniorPositions(1);
+        (, address owner,,,,,,) = vault.seniorPositions(1);
         require(owner == address(this), "senior owner mismatch");
     }
 
@@ -97,6 +100,8 @@ contract RiskShieldV4IntegrationTest {
 
         risk.mint(address(this), 10_000 ether);
         usdc.mint(address(this), 10_000_000 * USDC);
+        usdc.approve(address(vault), type(uint256).max);
+        vault.depositJunior(PoolId.unwrap(key.toId()), 1_000_000 * USDC);
         risk.approve(address(router), type(uint256).max);
         usdc.approve(address(router), type(uint256).max);
 
@@ -118,6 +123,40 @@ contract RiskShieldV4IntegrationTest {
 
         require(hook.lastPremiumBps(key.toId()) > 0, "premium not quoted");
         require(vault.reserveAvailable(poolId) >= 10 * USDC, "reserve not funded");
+    }
+
+    function testRealPoolManagerSwapPaysQuotedPremiumFromTrader() external {
+        router.initialize(key, SQRT_PRICE_1_1);
+
+        risk.mint(address(this), 10_000 ether);
+        usdc.mint(address(this), 10_000_000 * USDC);
+        usdc.approve(address(vault), type(uint256).max);
+        vault.depositJunior(PoolId.unwrap(key.toId()), 1_000_000 * USDC);
+        risk.approve(address(router), type(uint256).max);
+        usdc.approve(address(router), type(uint256).max);
+
+        ModifyLiquidityParams memory params =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e12, salt: bytes32(0)});
+        router.modifyLiquidity(
+            key,
+            params,
+            abi.encode(uint8(1), address(this), 1 ether, 2_000 * USDC, 2_000e18)
+        );
+
+        SwapParams memory swapParams = SwapParams({
+            zeroForOne: true,
+            amountSpecified: -1e9,
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+        });
+        bytes memory hookData = abi.encode(int24(120));
+        bytes32 poolId = PoolId.unwrap(key.toId());
+        (, uint256 premiumAmount) = router.quotePremium(key, swapParams, hookData, 1_000 * USDC);
+        uint256 reserveBefore = vault.reserveAvailable(poolId);
+
+        router.swapAndPayPremium(key, swapParams, hookData, 1_000 * USDC, poolId);
+
+        require(premiumAmount > 0, "premium not quoted");
+        require(vault.reserveAvailable(poolId) == reserveBefore + premiumAmount, "premium not paid");
     }
 
     function _mineSalt(address deployer, bytes32 initCodeHash) internal pure returns (bytes32 salt) {

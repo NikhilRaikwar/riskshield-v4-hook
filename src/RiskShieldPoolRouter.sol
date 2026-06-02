@@ -9,11 +9,14 @@ import {BalanceDelta, BalanceDeltaLibrary} from "v4-core/src/types/BalanceDelta.
 import {ModifyLiquidityParams, SwapParams} from "v4-core/src/types/PoolOperation.sol";
 
 import {IERC20} from "./IERC20.sol";
+import {RiskShieldHook} from "./RiskShieldHook.sol";
 import {RiskShieldVault} from "./RiskShieldVault.sol";
 
 contract RiskShieldPoolRouter is IUnlockCallback {
     using BalanceDeltaLibrary for BalanceDelta;
     using CurrencyLibrary for Currency;
+
+    uint256 internal constant BPS = 10_000;
 
     enum Action {
         ModifyLiquidity,
@@ -36,6 +39,7 @@ contract RiskShieldPoolRouter is IUnlockCallback {
     IERC20 public immutable reserveToken;
 
     event LiquidityModified(address indexed payer, BalanceDelta delta, BalanceDelta feesAccrued);
+    event PremiumPaid(bytes32 indexed poolId, address indexed trader, uint256 premiumAmount, uint256 premiumBps);
     event SwapExecuted(address indexed payer, BalanceDelta delta, uint256 reservePremiumAmount);
 
     error NotPoolManager();
@@ -81,12 +85,7 @@ contract RiskShieldPoolRouter is IUnlockCallback {
         bytes32 premiumPoolId
     ) external returns (BalanceDelta delta) {
         if (reservePremiumAmount != 0) {
-            bool pulled = reserveToken.transferFrom(msg.sender, address(this), reservePremiumAmount);
-            if (!pulled) revert TransferFailed();
-
-            bool approved = reserveToken.approve(address(vault), reservePremiumAmount);
-            if (!approved) revert TransferFailed();
-            vault.fundPremium(premiumPoolId, reservePremiumAmount);
+            _fundPremium(msg.sender, premiumPoolId, reservePremiumAmount, 0);
         }
 
         bytes memory result = poolManager.unlock(
@@ -104,6 +103,52 @@ contract RiskShieldPoolRouter is IUnlockCallback {
                     swapParams: params,
                     hookData: hookData,
                     reservePremiumAmount: reservePremiumAmount,
+                    premiumPoolId: premiumPoolId
+                })
+            )
+        );
+
+        delta = abi.decode(result, (BalanceDelta));
+    }
+
+    function quotePremium(PoolKey calldata key, SwapParams calldata params, bytes calldata hookData, uint256 premiumBaseAmount)
+        public
+        view
+        returns (uint256 premiumBps, uint256 premiumAmount)
+    {
+        premiumBps = RiskShieldHook(address(key.hooks)).previewPremiumBps(key, params, hookData);
+        premiumAmount = (premiumBaseAmount * premiumBps) / BPS;
+    }
+
+    function swapAndPayPremium(
+        PoolKey calldata key,
+        SwapParams calldata params,
+        bytes calldata hookData,
+        uint256 premiumBaseAmount,
+        bytes32 premiumPoolId
+    ) external returns (BalanceDelta delta, uint256 premiumAmount) {
+        (uint256 premiumBps, uint256 quotedPremiumAmount) = quotePremium(key, params, hookData, premiumBaseAmount);
+        premiumAmount = quotedPremiumAmount;
+        if (premiumAmount != 0) {
+            _fundPremium(msg.sender, premiumPoolId, premiumAmount, premiumBps);
+            emit PremiumPaid(premiumPoolId, msg.sender, premiumAmount, premiumBps);
+        }
+
+        bytes memory result = poolManager.unlock(
+            abi.encode(
+                CallbackData({
+                    action: Action.Swap,
+                    payer: msg.sender,
+                    key: key,
+                    liquidityParams: ModifyLiquidityParams({
+                        tickLower: 0,
+                        tickUpper: 0,
+                        liquidityDelta: 0,
+                        salt: bytes32(0)
+                    }),
+                    swapParams: params,
+                    hookData: hookData,
+                    reservePremiumAmount: premiumAmount,
                     premiumPoolId: premiumPoolId
                 })
             )
@@ -146,5 +191,13 @@ contract RiskShieldPoolRouter is IUnlockCallback {
             poolManager.take(currency, payer, uint128(delta));
         }
     }
-}
 
+    function _fundPremium(address trader, bytes32 poolId, uint256 amount, uint256 premiumBps) internal {
+        bool pulled = reserveToken.transferFrom(trader, address(this), amount);
+        if (!pulled) revert TransferFailed();
+
+        bool approved = reserveToken.approve(address(vault), amount);
+        if (!approved) revert TransferFailed();
+        vault.fundPremiumWithBps(poolId, amount, premiumBps);
+    }
+}

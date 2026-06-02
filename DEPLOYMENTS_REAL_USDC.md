@@ -37,52 +37,60 @@ The deployer wallet needs:
 - Unichain Sepolia ETH for gas.
 - Unichain Sepolia USDC for junior deposits, pool liquidity, and premium funding.
 
-## Post-Deployment Fields
+## Upgraded Deployment
 
-Deployed June 2, 2026 on Unichain Sepolia:
+Deployed June 2, 2026 on Unichain Sepolia after the risk-market upgrade:
 
 ```text
-MockRiskAsset: 0x312751138a3ae633b942b9a8fad8f12de9361dac
-RiskShieldVault: 0x5f1190906d31eefd9afe43b6631b3b20d712e7b2
-HookDeployer: 0xa670d391658c9d54bbec9d1ff0b107e96a627abe
-RiskShieldHook: 0x192D6906dC087978Fb86FbF4868D49144b7847C0
-RiskShieldPoolRouter: 0xe4dc72b113ca3fb856a8b74da7d08410156513e1
-Pool ID: 0x4647bc3b1532e12f33a997bccdf0e1f40c2a9d4e5216725de619a3619c4a82b8
+MockRiskAsset: 0x0ca086118b4d1ff6599b75d9f14defbc3242ab78
+RiskShieldVault: 0xe12b741707eb4b9a8762d58c2e36b909e345d5e4
+HookDeployer: 0xb3fc43699c0fea4de320cfbc1be75550558828f3
+RiskShieldHook: 0x49026475bca9C0FDD778dDF143E7a596b4D6C7C0
+RiskShieldPoolRouter: 0xb4c8d25afac20572347977e9dc1d18c61d58c736
+Pool ID: 0xb0dda0a853ae4eefb5ed690dc7de5cfefe01ef3572152e0170db69c3e57f71c4
 Hook permission bits: 0x07c0
 ```
 
-Transaction links:
+The upgraded stack includes router allowlisting, active protected liability tracking, junior share accounting, junior withdrawal previews, and explicit `swapAndPayPremium` trader-paid premium funding.
+
+Deployment transaction links:
 
 ```text
-MockRiskAsset deploy: https://sepolia.uniscan.xyz/tx/0xe66f7f146a13fb0f1d8ab94d807dad0513f75890d903efa94a219465dd206de9
-RiskShieldVault deploy: https://sepolia.uniscan.xyz/tx/0xc0f81f88a95b9c748c24f4fbb40d9a2bf2b9078a092838319d7524eacd963ec3
-HookDeployer deploy: https://sepolia.uniscan.xyz/tx/0x52775ff7da2bfaf00b932385dde0997ec574d02d26fcfe85d5d1aa53a9ce07cb
-RiskShieldHook CREATE2 deploy: https://sepolia.uniscan.xyz/tx/0x4e9597013a56a310491ca030506f2650a313c680e9e1639895f9099f0fc6dadf
-Vault setHook: https://sepolia.uniscan.xyz/tx/0x5f6e5d7d8935715d654480975f575438c0c517ead7fcc1a373f773f2e7d4ef70
-RiskShieldPoolRouter deploy: https://sepolia.uniscan.xyz/tx/0x4ec52d9e19ad3e4aaf02e9d71abe96bb3cf113a49fce86d30655c2bda310ce9e
-Pool initialize: https://sepolia.uniscan.xyz/tx/0xdd8482a3fedaa582ca07893c12d579d5eeed5c35438828da57f14d6135dd638b
+MockRiskAsset deploy: https://sepolia.uniscan.xyz/tx/0x93766ecaf015c09e597ad2e3446ee7231e69ac2ba04e6dad856a204e9313818b
+RiskShieldVault deploy: https://sepolia.uniscan.xyz/tx/0x8c508188dae66aa031c9e0e5fb9e6c3aa8fd4f21e405e6995f0397b2559c7e4e
+HookDeployer deploy: https://sepolia.uniscan.xyz/tx/0x04b72d824a75790040a4421d1bcda787d685ee956d052eacaff657c8b2abda53
+RiskShieldHook CREATE2 deploy: https://sepolia.uniscan.xyz/tx/0x58c263d66c31c19722b6377ed24350b1aec01759cb708e3212b0c889e7a45f20
+Vault setHook: https://sepolia.uniscan.xyz/tx/0xa98c0d708c491a1709c55e560ae2f63817e1a3473e6bfbd172b0723cdabe4329
+RiskShieldPoolRouter deploy: https://sepolia.uniscan.xyz/tx/0x051133bf0b80cddfca0d730ed10ef1148def29437214d44ec726a2cf97862cb4
+Vault setRouter: https://sepolia.uniscan.xyz/tx/0x4a04b60de7d1d8159c435736d999fde0f7f8f42b4a4a1261948ab4f9fab4ef3e
+Pool initialize: https://sepolia.uniscan.xyz/tx/0xc312b19a705727cf4381fc6adabd021ada1ff1cd9b4f8be560b4792e957c46a0
 ```
 
 CLI smoke test transactions:
 
 ```text
-Approve USDC to vault: https://sepolia.uniscan.xyz/tx/0xad13c7410cf1c10b19e2919fd01e76bfd15426e3e62e63bc6dc74a66b2f9f90d
-Deposit junior USDC reserve: https://sepolia.uniscan.xyz/tx/0x9c3dc5f506d7c4f5afff2d42e558aca0a62891c906ec1411c2cc27f8fc36b0aa
-Mint mRISK: https://sepolia.uniscan.xyz/tx/0x258739f1370bbcb42cd93976bfd7dee59cfd2dbc9aa4e43d3f8f0c5d2db81317
-Approve mRISK to router: https://sepolia.uniscan.xyz/tx/0xd27700fe0b666f82501eb09668b722b8edacf2f729f166606296b77747768fc3
-Approve USDC to router: https://sepolia.uniscan.xyz/tx/0x0bfa32ef928e1b21ce5eaf416f808125382e5e0ad4b8a9eb7c60a4e3571c53d5
-Add protected senior liquidity: https://sepolia.uniscan.xyz/tx/0x18ceb2d6fa0dfefa9dc830c980f7240541e56ce1b7b22d20c3c2dd7f19284f37
-Swap and fund premium: https://sepolia.uniscan.xyz/tx/0xe4b2dd8dac9f67493c06b45da40ee69379c1be48422456c71a6fd578266d9b91
+Approve USDC to vault: https://sepolia.uniscan.xyz/tx/0x9878b352b9ffb004931ea530e48f304d7b5a10ab88a09f174e08cb454b20f2ee
+Deposit junior USDC reserve: https://sepolia.uniscan.xyz/tx/0x0fb903ca579df3bb2459a101074e1be075ef1cf88f60ea3547c690b1d84d3390
+Mint mRISK: https://sepolia.uniscan.xyz/tx/0xaafaa7e56c111729e914d1fea0849aa8337c6611c4337e191055a4c0adc6ed35
+Approve mRISK to router: https://sepolia.uniscan.xyz/tx/0x3aaa44f11c98f2c45a03f549ecdf94c7a4aec6c4c7603b5177bb73e76e6065b7
+Approve USDC to router: https://sepolia.uniscan.xyz/tx/0x3ef7a97a3f08780e47983a9dae5957203b1d6ebfcfca8554369b232006ff78c0
+Add protected senior liquidity: https://sepolia.uniscan.xyz/tx/0x509383492f853e6e12213712f3ee677e8ab2449deeb182e55e87548c8c517b4d
+Swap and pay quoted premium: https://sepolia.uniscan.xyz/tx/0xe49dc0e0b373a2ef507d25a4e1b35d0d2be19cab7b70459322b590a45ab0ffab
 ```
 
 Verified CLI smoke state:
 
 ```text
-Vault USDC balance: 3 USDC
-Reserve available: 3 USDC
-Junior balance: 2 USDC
+Reserve available: 2.017 USDC
+Junior balance: 2.017 USDC
+Junior share price: 1.0085
+Active protected liability: 0.6 USDC
+Withdrawable reserve: 1.267 USDC
 Senior positions opened: 1
 Last premium: 17 bps
+Quoted premium paid: 0.017 USDC
+Pool tick: -30
+Pool liquidity: 10000000000
 ```
 
 Frontend real-USDC mode:
@@ -90,9 +98,9 @@ Frontend real-USDC mode:
 ```text
 VITE_RISKSHIELD_MODE=real-usdc
 VITE_RISKSHIELD_USDC=0x31d0220469e10c4E71834a79b1f276d740d3768F
-VITE_RISKSHIELD_RISK_ASSET=0x312751138a3ae633b942b9a8fad8f12de9361dac
-VITE_RISKSHIELD_VAULT=0x5f1190906d31eefd9afe43b6631b3b20d712e7b2
-VITE_RISKSHIELD_HOOK=0x192D6906dC087978Fb86FbF4868D49144b7847C0
-VITE_RISKSHIELD_ROUTER=0xe4dc72b113ca3fb856a8b74da7d08410156513e1
-VITE_RISKSHIELD_POOL_ID=0x4647bc3b1532e12f33a997bccdf0e1f40c2a9d4e5216725de619a3619c4a82b8
+VITE_RISKSHIELD_RISK_ASSET=0x0ca086118b4d1ff6599b75d9f14defbc3242ab78
+VITE_RISKSHIELD_VAULT=0xe12b741707eb4b9a8762d58c2e36b909e345d5e4
+VITE_RISKSHIELD_HOOK=0x49026475bca9C0FDD778dDF143E7a596b4D6C7C0
+VITE_RISKSHIELD_ROUTER=0xb4c8d25afac20572347977e9dc1d18c61d58c736
+VITE_RISKSHIELD_POOL_ID=0xb0dda0a853ae4eefb5ed690dc7de5cfefe01ef3572152e0170db69c3e57f71c4
 ```

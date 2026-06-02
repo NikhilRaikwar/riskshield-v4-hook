@@ -33,8 +33,11 @@ contract SmokeV4RiskShield is Script {
 
         vm.startBroadcast(deployerKey);
 
+        vault.setRouter(address(router), true);
         usdc.mint(deployer, 10_000e6);
         risk.mint(deployer, 10_000 ether);
+        IERC20(address(usdc)).approve(address(vault), type(uint256).max);
+        vault.depositJunior(poolId, 1_000e6);
         IERC20(address(usdc)).approve(address(router), type(uint256).max);
         IERC20(address(risk)).approve(address(router), type(uint256).max);
 
@@ -44,16 +47,17 @@ contract SmokeV4RiskShield is Script {
             abi.encode(uint8(1), deployer, 1 ether, 2_000e6, 2_000e18)
         );
 
-        router.swapAndFundPremium(
+        (, uint256 premiumAmount) = router.swapAndPayPremium(
             key,
             SwapParams({zeroForOne: true, amountSpecified: -1e9, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1}),
             abi.encode(int24(120)),
-            10e6,
+            1_000e6,
             poolId
         );
 
         require(hook.lastPremiumBps(key.toId()) > 0, "premium missing");
-        require(vault.reserveAvailable(poolId) >= 10e6, "reserve missing");
+        require(premiumAmount > 0, "premium unpaid");
+        require(vault.reserveAvailable(poolId) >= 1_000e6 + premiumAmount, "reserve missing");
 
         vm.stopBroadcast();
     }

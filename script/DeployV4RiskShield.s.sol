@@ -50,6 +50,7 @@ contract DeployV4RiskShield is Script {
         vault.setHook(address(hook));
 
         router = new RiskShieldPoolRouter(IPoolManager(UNICHAIN_SEPOLIA_POOL_MANAGER), vault);
+        vault.setRouter(address(router), true);
         router.initialize(_poolKey(risk, usdc, hook), SQRT_PRICE_1_1);
 
         vm.stopBroadcast();
@@ -85,4 +86,3 @@ contract DeployV4RiskShield is Script {
         revert("salt not found");
     }
 }
-

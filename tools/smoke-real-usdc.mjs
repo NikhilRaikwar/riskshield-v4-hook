@@ -54,17 +54,27 @@ const tokenAbi = parseAbi([
 ]);
 const vaultAbi = parseAbi([
   "function depositJunior(bytes32 poolId,uint256 amount)",
+  "function setRouter(address router,bool approved)",
+  "function approvedRouters(address router) view returns (bool)",
   "function reserveAvailable(bytes32 poolId) view returns (uint256)",
   "function juniorBalanceOf(bytes32 poolId,address account) view returns (uint256)",
+  "function juniorSharePrice(bytes32 poolId) view returns (uint256)",
+  "function activeProtectedLiability(bytes32 poolId) view returns (uint256)",
+  "function withdrawableReserve(bytes32 poolId) view returns (uint256)",
   "function nextPositionId() view returns (uint256)",
 ]);
 const hookAbi = parseAbi(["function lastPremiumBps(bytes32 poolId) view returns (uint256)"]);
 const routerAbi = parseAbi([
   "function modifyLiquidity((address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks) key,(int24 tickLower,int24 tickUpper,int256 liquidityDelta,bytes32 salt) params,bytes hookData) returns (int256 delta,int256 feesAccrued)",
   "function swapAndFundPremium((address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks) key,(bool zeroForOne,int256 amountSpecified,uint160 sqrtPriceLimitX96) params,bytes hookData,uint256 reservePremiumAmount,bytes32 premiumPoolId) returns (int256 delta)",
+  "function quotePremium((address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks) key,(bool zeroForOne,int256 amountSpecified,uint160 sqrtPriceLimitX96) params,bytes hookData,uint256 premiumBaseAmount) view returns (uint256 premiumBps,uint256 premiumAmount)",
+  "function swapAndPayPremium((address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks) key,(bool zeroForOne,int256 amountSpecified,uint160 sqrtPriceLimitX96) params,bytes hookData,uint256 premiumBaseAmount,bytes32 premiumPoolId) returns (int256 delta,uint256 premiumAmount)",
 ]);
 
 const MIN_SQRT_PRICE_PLUS_ONE = 4295128740n;
+const MAX_SQRT_PRICE_MINUS_ONE = 1461446703485210103287273052203988822378723970341n;
+const SQRT_PRICE_TICK_NEG_30 = 79109415290437042302807587396n;
+const SQRT_PRICE_TICK_30 = 79347087983666005045280518415n;
 const poolKey =
   BigInt(deployment.risk) < BigInt(deployment.usdc)
     ? {
@@ -81,6 +91,10 @@ const poolKey =
         tickSpacing: 60,
         hooks: deployment.hook,
       };
+const reserveIsCurrency0 = poolKey.currency0.toLowerCase() === deployment.usdc.toLowerCase();
+const demoZeroForOne = !reserveIsCurrency0;
+const demoSwapInputAmount = parseUnits("0.000000001", 18);
+let demoPremiumBaseAmount = parseUnits("10", 6);
 
 const txs = {};
 
@@ -155,6 +169,9 @@ async function pickLiquidityDelta() {
 console.log(`Smoke wallet: ${account.address}`);
 console.log(`Pool ID: ${deployment.poolId}`);
 console.log(`Token order: currency0=${poolKey.currency0}, currency1=${poolKey.currency1}`);
+console.log(
+  `Demo swap input: ${formatUnits(demoSwapInputAmount, 18)} mRISK (${demoZeroForOne ? "currency0 -> currency1" : "currency1 -> currency0"})`,
+);
 
 const usdcBalanceBefore = await publicClient.readContract({
   address: deployment.usdc,
@@ -163,36 +180,95 @@ const usdcBalanceBefore = await publicClient.readContract({
   args: [account.address],
 });
 console.log(`USDC before: ${formatUnits(usdcBalanceBefore, 6)}`);
+if (usdcBalanceBefore < parseUnits("1", 6)) {
+  demoPremiumBaseAmount = parseUnits("0.01", 6);
+}
+console.log(`Premium base amount: ${formatUnits(demoPremiumBaseAmount, 6)} USDC`);
 
-await ensureApproval(deployment.usdc, deployment.vault, parseUnits("2", 6), "Approve USDC to vault");
-await write("Deposit junior USDC reserve", deployment.vault, vaultAbi, "depositJunior", [
-  deployment.poolId,
-  parseUnits("2", 6),
-]);
+const routerApproved = await publicClient.readContract({
+  address: deployment.vault,
+  abi: vaultAbi,
+  functionName: "approvedRouters",
+  args: [deployment.router],
+});
+if (!routerApproved) {
+  await write("Approve router on vault", deployment.vault, vaultAbi, "setRouter", [deployment.router, true]);
+}
+
+const targetJuniorReserve = parseUnits("2", 6);
+const reserveBeforeDeposit = await publicClient.readContract({
+  address: deployment.vault,
+  abi: vaultAbi,
+  functionName: "reserveAvailable",
+  args: [deployment.poolId],
+});
+if (reserveBeforeDeposit < targetJuniorReserve) {
+  const juniorDepositAmount = targetJuniorReserve - reserveBeforeDeposit;
+  await ensureApproval(deployment.usdc, deployment.vault, juniorDepositAmount, "Approve USDC to vault");
+  await write("Deposit junior USDC reserve", deployment.vault, vaultAbi, "depositJunior", [
+    deployment.poolId,
+    juniorDepositAmount,
+  ]);
+} else {
+  console.log(`Junior reserve already funded: ${formatUnits(reserveBeforeDeposit, 6)} USDC`);
+}
 
 await write("Mint mRISK", deployment.risk, tokenAbi, "mint", [account.address, parseUnits("10000", 18)]);
 await ensureApproval(deployment.risk, deployment.router, parseUnits("10000", 18), "Approve mRISK to router");
-await ensureApproval(deployment.usdc, deployment.router, parseUnits("10", 6), "Approve USDC to router");
+await ensureApproval(deployment.usdc, deployment.router, parseUnits("20", 6), "Approve USDC to router");
 
-const liquidityDelta = await pickLiquidityDelta();
-console.log(`Selected liquidityDelta: ${liquidityDelta}`);
-await write("Add protected senior liquidity", deployment.router, routerAbi, "modifyLiquidity", [
-  poolKey,
-  { tickLower: -60, tickUpper: 60, liquidityDelta, salt: `0x${"0".repeat(64)}` },
-  seniorHookData(liquidityDelta),
-]);
+let liquidityDelta = 0n;
+const nextPositionIdBefore = await publicClient.readContract({
+  address: deployment.vault,
+  abi: vaultAbi,
+  functionName: "nextPositionId",
+});
+if (nextPositionIdBefore <= 1n) {
+  liquidityDelta = await pickLiquidityDelta();
+  console.log(`Selected liquidityDelta: ${liquidityDelta}`);
+  await write("Add protected senior liquidity", deployment.router, routerAbi, "modifyLiquidity", [
+    poolKey,
+    { tickLower: -60, tickUpper: 60, liquidityDelta, salt: `0x${"0".repeat(64)}` },
+    seniorHookData(liquidityDelta),
+  ]);
+} else {
+  console.log(`Protected senior position already exists: ${nextPositionIdBefore - 1n} opened`);
+}
 
-await write("Swap and fund premium", deployment.router, routerAbi, "swapAndFundPremium", [
+const swapParams = {
+  zeroForOne: demoZeroForOne,
+  amountSpecified: -demoSwapInputAmount,
+  sqrtPriceLimitX96: demoZeroForOne ? SQRT_PRICE_TICK_NEG_30 : SQRT_PRICE_TICK_30,
+};
+const swapHookData = encodeAbiParameters([{ type: "int24" }], [120]);
+const [quotedPremiumBps, quotedPremiumAmount] = await publicClient.readContract({
+  address: deployment.router,
+  abi: routerAbi,
+  functionName: "quotePremium",
+  args: [poolKey, swapParams, swapHookData, demoPremiumBaseAmount],
+});
+console.log(`Quoted trader premium: ${formatUnits(quotedPremiumAmount, 6)} USDC at ${quotedPremiumBps} bps`);
+
+await write("Swap and pay quoted premium", deployment.router, routerAbi, "swapAndPayPremium", [
   poolKey,
-  { zeroForOne: true, amountSpecified: -1_000_000_000n, sqrtPriceLimitX96: MIN_SQRT_PRICE_PLUS_ONE },
-  encodeAbiParameters([{ type: "int24" }], [120]),
-  parseUnits("1", 6),
+  swapParams,
+  swapHookData,
+  demoPremiumBaseAmount,
   deployment.poolId,
 ]);
 
 await new Promise((resolve) => setTimeout(resolve, 4000));
 
-const [reserveAvailable, juniorBalance, nextPositionId, lastPremiumBps, usdcBalanceAfter] = await Promise.all([
+const [
+  reserveAvailable,
+  juniorBalance,
+  juniorSharePrice,
+  activeProtectedLiability,
+  withdrawableReserve,
+  nextPositionId,
+  lastPremiumBps,
+  usdcBalanceAfter,
+] = await Promise.all([
   publicClient.readContract({ address: deployment.vault, abi: vaultAbi, functionName: "reserveAvailable", args: [deployment.poolId] }),
   publicClient.readContract({
     address: deployment.vault,
@@ -200,6 +276,9 @@ const [reserveAvailable, juniorBalance, nextPositionId, lastPremiumBps, usdcBala
     functionName: "juniorBalanceOf",
     args: [deployment.poolId, account.address],
   }),
+  publicClient.readContract({ address: deployment.vault, abi: vaultAbi, functionName: "juniorSharePrice", args: [deployment.poolId] }),
+  publicClient.readContract({ address: deployment.vault, abi: vaultAbi, functionName: "activeProtectedLiability", args: [deployment.poolId] }),
+  publicClient.readContract({ address: deployment.vault, abi: vaultAbi, functionName: "withdrawableReserve", args: [deployment.poolId] }),
   publicClient.readContract({ address: deployment.vault, abi: vaultAbi, functionName: "nextPositionId" }),
   publicClient.readContract({ address: deployment.hook, abi: hookAbi, functionName: "lastPremiumBps", args: [deployment.poolId] }),
   publicClient.readContract({ address: deployment.usdc, abi: tokenAbi, functionName: "balanceOf", args: [account.address] }),
@@ -213,9 +292,14 @@ console.log(
       liquidityDelta: liquidityDelta.toString(),
       reserveAvailable: formatUnits(reserveAvailable, 6),
       juniorBalance: formatUnits(juniorBalance, 6),
+      juniorSharePrice: formatUnits(juniorSharePrice, 18),
+      activeProtectedLiability: formatUnits(activeProtectedLiability, 6),
+      withdrawableReserve: formatUnits(withdrawableReserve, 6),
       nextPositionId: nextPositionId.toString(),
       seniorPositionsOpened: (nextPositionId - 1n).toString(),
       lastPremiumBps: lastPremiumBps.toString(),
+      quotedPremiumBps: quotedPremiumBps.toString(),
+      quotedPremiumAmount: formatUnits(quotedPremiumAmount, 6),
       usdcBefore: formatUnits(usdcBalanceBefore, 6),
       usdcAfter: formatUnits(usdcBalanceAfter, 6),
     },

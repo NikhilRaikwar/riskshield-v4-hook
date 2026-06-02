@@ -64,4 +64,26 @@ if (output.errors) {
   }
 }
 
+fs.rmSync(path.join(root, "out"), { recursive: true, force: true });
+
+for (const [sourceName, contracts] of Object.entries(output.contracts ?? {})) {
+  const sourceBaseName = path.basename(sourceName);
+  const outputDir = path.join(root, "out", sourceBaseName);
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  for (const [contractName, contractOutput] of Object.entries(contracts)) {
+    fs.writeFileSync(
+      path.join(outputDir, `${contractName}.json`),
+      JSON.stringify(
+        {
+          abi: contractOutput.abi,
+          bytecode: contractOutput.evm.bytecode.object,
+        },
+        null,
+        2,
+      ),
+    );
+  }
+}
+
 console.log(`Compiled ${Object.keys(output.contracts ?? {}).length} source units successfully.`);

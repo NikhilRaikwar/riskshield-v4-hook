@@ -15,10 +15,11 @@ Passive LPs still underwrite impermanent loss and loss-versus-rebalancing withou
 RiskShield introduces an insurance layer around a Uniswap v4 pool:
 
 - Senior LPs provide protected liquidity and receive lower-risk yield.
-- Junior insurers provide first-loss reserve capital and earn premium yield.
+- Junior insurers provide first-loss reserve capital, receive pool-specific shares, and earn premium yield.
 - Traders pay a dynamic impermanent-loss protection premium when swaps are larger or more volatile.
 - Premiums build the insurance reserve.
 - When senior LPs exit, the vault compares their LP exit value against a hold benchmark and pays covered loss from the reserve.
+- Pool risk limits prevent senior protection from overcommitting the junior reserve.
 
 The MVP keeps the mechanism self-contained. It avoids perps, lending, options, and external oracle dependencies so the hook is easy to reason about and demo.
 
@@ -33,14 +34,18 @@ Uniswap v4 hooks can run around pool lifecycle events. RiskShield uses this to:
 
 The hook deliberately avoids return-delta swap logic in the MVP. The current v4 router funds the insurance reserve alongside a real PoolManager swap; the production extension can add custom accounting for direct PoolManager fee custody after the core mechanism is tested.
 
+The upgraded router now quotes the premium from the hook, pulls the calculated USDC premium from the trader, and funds the vault through an approved-router path. See `PERIPHERY.md` for the routing model and Universal Router / Permit2 production path.
+
 ## Architecture
 
 ```text
 Trader swap
    |
    v
-RiskShieldPoolRouter.swapAndFundPremium
-   - funds the RiskShield reserve premium path
+RiskShieldPoolRouter.swapAndPayPremium
+   - quotes the RiskShield premium
+   - pulls the trader-paid USDC premium
+   - funds the RiskShield reserve path
    - unlocks PoolManager
    |
    v
@@ -53,7 +58,7 @@ Uniswap v4 PoolManager.swap
    |
    v
 RiskShieldHook.afterSwap
-   - records premium estimate for pool analytics
+   - records premium analytics for the pool
    |
    v
 RiskShieldVault
@@ -67,7 +72,7 @@ RiskShieldVault
 
 - `RiskShieldHook.sol`: Uniswap v4 hook callback surface and premium fee calculation.
 - `RiskShieldVault.sol`: Senior positions, junior reserves, premium accounting, and IL compensation.
-- `RiskShieldPoolRouter.sol`: Demo router for real PoolManager initialize, liquidity, swap, and premium funding flows.
+- `RiskShieldPoolRouter.sol`: Demo router for real PoolManager initialize, liquidity, swap, premium quoting, and trader-paid premium flows.
 - `HookDeployer.sol`: Minimal CREATE2 deployer used to mine the hook permission address.
 - `InsuranceMath.sol`: Pure premium, value, and coverage math.
 - `MockUSDC.sol`: 6-decimal local reserve token.
@@ -79,9 +84,17 @@ RiskShieldVault
 2. Bob deposits USDC as junior first-loss reserve capital.
 3. Traders swap through the v4 pool.
 4. The hook raises fees for larger or more volatile swaps.
-5. Premiums accrue into RiskShield's reserve accounting through the router path.
+5. The router pulls the quoted USDC premium from the trader and credits RiskShield's reserve.
 6. Alice exits after an adverse price move.
 7. RiskShield pays covered IL from the available reserve, capped by coverage limits and actual reserve balance.
+
+## Final Upgrade Features
+
+- Approved-router premium funding so only hook-aware periphery can write premium reserve state.
+- Pool risk controls for max coverage, reserve utilization, max exposure, min reserve, and max premium.
+- Junior reserve shares, share price, withdrawal previews, and locked reserve logic.
+- Active senior liability tracking to prevent undercollateralized protected LP positions.
+- Explicit trader-paid premium path through `swapAndPayPremium`.
 
 ## Unichain Sepolia
 
@@ -96,18 +109,32 @@ Primary demo chain: Unichain Sepolia
 - PoolModifyLiquidityTest: `0x5fa728c0a5cfd51bee4b060773f50554c0c8a7ab`
 - Permit2: `0x000000000022D473030F116dDEE9F6B43aC78BA3`
 
-## Current Full v4 Deployment
+## Current Real-USDC v4 Deployment
 
 ```text
-MockUSDC: 0xb0cD9Ec340036f47F4655d9BBfE1E172E3209A06
-MockRiskAsset: 0x72290EB00a06c4a5582c64e8E336F6e4D242bE87
-RiskShieldVault: 0xAE2fbD03F210206774BD2A43Bc96823a18022a5f
-RiskShieldHook: 0xd9E54DB85EC7BbBFbFE1d47fae90b941aA4aC7C0
-RiskShieldPoolRouter: 0x11fB0B3C8355fF826a3BC9316ea5B0A46E2FF0C0
-Pool ID: 0xf7ab8f4eeb4e9ae1a8bf02a06f9d65aeeabefe42d29c38473c354eaaad1d4ba5
+USDC: 0x31d0220469e10c4E71834a79b1f276d740d3768F
+MockRiskAsset: 0x0ca086118b4d1ff6599b75d9f14defbc3242ab78
+RiskShieldVault: 0xe12b741707eb4b9a8762d58c2e36b909e345d5e4
+RiskShieldHook: 0x49026475bca9C0FDD778dDF143E7a596b4D6C7C0
+RiskShieldPoolRouter: 0xb4c8d25afac20572347977e9dc1d18c61d58c736
+Pool ID: 0xb0dda0a853ae4eefb5ed690dc7de5cfefe01ef3572152e0170db69c3e57f71c4
 ```
 
-The hook address has the required `0x07c0` permission mask and the pool has been initialized on Unichain Sepolia.
+The hook address has the required `0x07c0` permission mask and the pool has been initialized on Unichain Sepolia. The latest CLI smoke test proves junior USDC reserve funding, protected senior liquidity, and trader-paid premium funding through `swapAndPayPremium`.
+
+Latest smoke proof:
+
+```text
+Add protected senior liquidity: https://sepolia.uniscan.xyz/tx/0x509383492f853e6e12213712f3ee677e8ab2449deeb182e55e87548c8c517b4d
+Swap and pay quoted premium: https://sepolia.uniscan.xyz/tx/0xe49dc0e0b373a2ef507d25a4e1b35d0d2be19cab7b70459322b590a45ab0ffab
+Reserve available after smoke: 2.017 USDC
+Junior share price after smoke: 1.0085
+Active protected liability: 0.6 USDC
+Senior positions opened: 1
+Last premium: 17 bps
+Pool tick after smoke: -30
+Active pool liquidity: 10000000000
+```
 
 ## Local Setup
 
@@ -154,7 +181,7 @@ Run the real testnet smoke flow after deployment:
 forge script script/SmokeV4RiskShield.s.sol:SmokeV4RiskShield --rpc-url unichain_sepolia --broadcast
 ```
 
-The smoke flow mints mock assets, approves the router, adds liquidity through `PoolManager.modifyLiquidity`, swaps through `PoolManager.swap`, and funds the RiskShield reserve path.
+The smoke flow mints the demo risk asset, approves the hook-aware router, adds protected liquidity through `PoolManager.modifyLiquidity`, swaps through `PoolManager.swap`, and pulls a quoted real-USDC insurance premium from the trader into the RiskShield reserve.
 
 The earlier standalone vault/hook logic deployment script is also available:
 

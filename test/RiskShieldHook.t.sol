@@ -5,6 +5,7 @@ import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
 import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
 import {Currency} from "v4-core/src/types/Currency.sol";
 import {PoolKey} from "v4-core/src/types/PoolKey.sol";
+import {PoolId} from "v4-core/src/types/PoolId.sol";
 import {PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
 import {BalanceDeltaLibrary} from "v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams, SwapParams} from "v4-core/src/types/PoolOperation.sol";
@@ -37,6 +38,7 @@ contract RiskShieldHookTest {
         vault = new RiskShieldVault(usdc, address(this));
         hook = new RiskShieldHook(address(this), vault);
         vault.setHook(address(hook));
+        vault.setRouter(address(this), true);
 
         key = PoolKey({
             currency0: Currency.wrap(address(risk)),
@@ -45,6 +47,10 @@ contract RiskShieldHookTest {
             tickSpacing: 60,
             hooks: IHooks(address(hook))
         });
+
+        usdc.mint(address(this), 10_000_000 * USDC);
+        usdc.approve(address(vault), 10_000_000 * USDC);
+        vault.depositJunior(PoolId.unwrap(key.toId()), 10_000_000 * USDC);
     }
 
     function testBeforeSwapReturnsDynamicPremiumFee() external {
@@ -88,11 +94,7 @@ contract RiskShieldHookTest {
         require(hook.lastPremiumBps(key.toId()) == hook.maxPremiumBps(), "premium not capped");
     }
 
-    function testAfterSwapAccountsPremium() external {
-        usdc.mint(address(this), 10_000 * USDC);
-        usdc.approve(address(vault), 10_000 * USDC);
-        vault.depositJunior(bytes32(0), 10_000 * USDC);
-
+    function testAfterSwapRecordsPremiumAnalytics() external {
         SwapParams memory params = SwapParams({
             zeroForOne: true,
             amountSpecified: -100_000 * int256(USDC),
@@ -102,7 +104,8 @@ contract RiskShieldHookTest {
         hook.beforeSwap(address(this), key, params, abi.encode(int24(120)));
         hook.afterSwap(address(this), key, params, BalanceDeltaLibrary.ZERO_DELTA, "");
 
-        require(vault.reserveAvailable(bytes32(0)) >= 10_000 * USDC, "reserve underflow");
+        require(hook.lastPremiumAmount(key.toId()) > 0, "premium amount missing");
+        require(hook.totalPremiumObserved(key.toId()) > 0, "premium analytics missing");
     }
 
     function testOnlyPoolManagerCanCallHookCallbacks() external {
@@ -131,7 +134,7 @@ contract RiskShieldHookTest {
             abi.encode(uint8(1), 1 ether, 2_000 * USDC, 2_000e18)
         );
 
-        (, address owner,,,,,) = vault.seniorPositions(1);
+        (, address owner,,,,,,) = vault.seniorPositions(1);
         require(owner == address(0xA11CE), "senior owner mismatch");
     }
 

@@ -38,10 +38,17 @@ const erc20Abi = parseAbi([
 ]);
 const vaultAbi = parseAbi([
   "function reserveAvailable(bytes32 poolId) view returns (uint256)",
+  "function juniorSharePrice(bytes32 poolId) view returns (uint256)",
+  "function activeProtectedLiability(bytes32 poolId) view returns (uint256)",
+  "function withdrawableReserve(bytes32 poolId) view returns (uint256)",
+  "function approvedRouters(address router) view returns (bool)",
   "function nextPositionId() view returns (uint256)",
   "function hook() view returns (address)",
 ]);
-const hookAbi = parseAbi(["function lastPremiumBps(bytes32 poolId) view returns (uint24)"]);
+const hookAbi = parseAbi([
+  "function lastPremiumBps(bytes32 poolId) view returns (uint256)",
+  "function lastPremiumAmount(bytes32 poolId) view returns (uint256)",
+]);
 const stateViewAbi = parseAbi([
   "function getSlot0(bytes32 poolId) view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee)",
   "function getLiquidity(bytes32 poolId) view returns (uint128 liquidity)",
@@ -55,6 +62,14 @@ const [usdcCode, riskCode, vaultCode, hookCode, routerCode] = await Promise.all(
   client.getCode({ address: deployment.router }),
 ]);
 
+async function readOptional(read) {
+  try {
+    return await read();
+  } catch {
+    return null;
+  }
+}
+
 const [symbol, decimals, vaultTokenBalance, reserveAvailable, nextPositionId, vaultHook, lastPremiumBps, slot0, liquidity] =
   await Promise.all([
     client.readContract({ address: deployment.usdc, abi: erc20Abi, functionName: "symbol" }),
@@ -66,6 +81,15 @@ const [symbol, decimals, vaultTokenBalance, reserveAvailable, nextPositionId, va
     client.readContract({ address: deployment.hook, abi: hookAbi, functionName: "lastPremiumBps", args: [deployment.poolId] }),
     client.readContract({ address: deployment.stateView, abi: stateViewAbi, functionName: "getSlot0", args: [deployment.poolId] }),
     client.readContract({ address: deployment.stateView, abi: stateViewAbi, functionName: "getLiquidity", args: [deployment.poolId] }),
+  ]);
+
+const [juniorSharePrice, activeProtectedLiability, withdrawableReserve, routerApproved, lastPremiumAmount] =
+  await Promise.all([
+    readOptional(() => client.readContract({ address: deployment.vault, abi: vaultAbi, functionName: "juniorSharePrice", args: [deployment.poolId] })),
+    readOptional(() => client.readContract({ address: deployment.vault, abi: vaultAbi, functionName: "activeProtectedLiability", args: [deployment.poolId] })),
+    readOptional(() => client.readContract({ address: deployment.vault, abi: vaultAbi, functionName: "withdrawableReserve", args: [deployment.poolId] })),
+    readOptional(() => client.readContract({ address: deployment.vault, abi: vaultAbi, functionName: "approvedRouters", args: [deployment.router] })),
+    readOptional(() => client.readContract({ address: deployment.hook, abi: hookAbi, functionName: "lastPremiumAmount", args: [deployment.poolId] })),
   ]);
 
 console.log(
@@ -85,8 +109,13 @@ console.log(
       token: { symbol, decimals },
       vaultTokenBalance: formatUnits(vaultTokenBalance, decimals),
       reserveAvailable: formatUnits(reserveAvailable, decimals),
+      juniorSharePrice: juniorSharePrice == null ? "unavailable on this deployment" : formatUnits(juniorSharePrice, 18),
+      activeProtectedLiability: activeProtectedLiability == null ? "unavailable on this deployment" : formatUnits(activeProtectedLiability, decimals),
+      withdrawableReserve: withdrawableReserve == null ? "unavailable on this deployment" : formatUnits(withdrawableReserve, decimals),
+      routerApproved,
       nextPositionId: nextPositionId.toString(),
       lastPremiumBps: lastPremiumBps.toString(),
+      lastPremiumAmount: lastPremiumAmount == null ? "unavailable on this deployment" : formatUnits(lastPremiumAmount, decimals),
       poolState: {
         sqrtPriceX96: slot0[0].toString(),
         tick: slot0[1].toString(),

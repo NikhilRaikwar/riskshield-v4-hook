@@ -137,14 +137,21 @@ const predictedHook = getContractAddress({
 });
 
 const hookDeployAbi = parseAbi(["function deploy(bytes32 salt, bytes creationCode) payable returns (address)"]);
-const hookDeployHash = await write("Deploy mined hook", hookDeployer.address, hookDeployAbi, "deploy", [hookSalt, hookInitCode]);
-await write("Set hook on vault", vault.address, vaultArtifact.abi, "setHook", [predictedHook]);
+const hookDeployHash = env.REAL_USDC_HOOK
+  ? env.REAL_USDC_HOOK_TX || "reused"
+  : await write("Deploy mined hook", hookDeployer.address, hookDeployAbi, "deploy", [hookSalt, hookInitCode]);
+const hookAddress = env.REAL_USDC_HOOK || predictedHook;
+await write("Set hook on vault", vault.address, vaultArtifact.abi, "setHook", [hookAddress]);
 
 const router = await deploy("RiskShieldPoolRouter", routerArtifact.abi, routerArtifact.bytecode, [
   ADDRESSES.poolManager,
   vault.address,
 ]);
-const key = poolKey(risk.address, ADDRESSES.usdc, predictedHook);
+const setRouterHash = await write("Approve router on vault", vault.address, vaultArtifact.abi, "setRouter", [
+  router.address,
+  true,
+]);
+const key = poolKey(risk.address, ADDRESSES.usdc, hookAddress);
 const initializeHash = await write("Initialize real-USDC v4 pool", router.address, routerArtifact.abi, "initialize", [
   key,
   SQRT_PRICE_1_1,
@@ -173,7 +180,7 @@ console.log(
       mockRiskAsset: risk.address,
       riskShieldVault: vault.address,
       hookDeployer: hookDeployer.address,
-      riskShieldHook: predictedHook,
+      riskShieldHook: hookAddress,
       riskShieldPoolRouter: router.address,
       poolId,
       txs: {
@@ -182,6 +189,7 @@ console.log(
         hookDeployerDeploy: hookDeployer.hash,
         hookDeploy: hookDeployHash,
         routerDeploy: router.hash,
+        setRouter: setRouterHash,
         initialize: initializeHash,
       },
     },

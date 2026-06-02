@@ -29,10 +29,12 @@ contract RiskShieldHook is IHooks {
     uint256 public referenceLiquidity = 1_000_000e6;
 
     mapping(PoolId poolId => uint256 premiumBps) public lastPremiumBps;
+    mapping(PoolId poolId => uint256 premiumAmount) public lastPremiumAmount;
+    mapping(PoolId poolId => uint256 premiumAmount) public totalPremiumObserved;
     mapping(PoolId poolId => int24 tick) public lastObservedTick;
 
     event PremiumQuoted(PoolId indexed poolId, uint256 premiumBps, uint24 feeOverride);
-    event PremiumAccounted(PoolId indexed poolId, uint256 premiumAmount);
+    event PremiumObserved(PoolId indexed poolId, uint256 premiumAmount);
 
     error NotPoolManager();
     error UnsupportedCallback();
@@ -136,18 +138,13 @@ contract RiskShieldHook is IHooks {
         onlyPoolManager
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        uint256 tickMove = 0;
+        uint256 premium = previewPremiumBps(key, params, hookData);
         if (hookData.length != 0) {
             (int24 observedTick) = abi.decode(hookData, (int24));
             PoolId poolId = key.toId();
-            tickMove = InsuranceMath.abs(int256(observedTick) - int256(lastObservedTick[poolId]));
             lastObservedTick[poolId] = observedTick;
         }
 
-        uint256 tradeAmount = InsuranceMath.abs(params.amountSpecified);
-        uint256 premium = InsuranceMath.premiumBps(
-            basePremiumBps, tradeAmount, referenceLiquidity, tickMove, maxPremiumBps
-        );
         PoolId id = key.toId();
         lastPremiumBps[id] = premium;
 
@@ -155,6 +152,22 @@ contract RiskShieldHook is IHooks {
         emit PremiumQuoted(id, premium, feeOverride);
 
         return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, feeOverride);
+    }
+
+    function previewPremiumBps(PoolKey calldata key, SwapParams calldata params, bytes calldata hookData)
+        public
+        view
+        returns (uint256 premium)
+    {
+        uint256 tickMove = 0;
+        if (hookData.length != 0) {
+            (int24 observedTick) = abi.decode(hookData, (int24));
+            PoolId poolId = key.toId();
+            tickMove = InsuranceMath.abs(int256(observedTick) - int256(lastObservedTick[poolId]));
+        }
+
+        uint256 tradeAmount = InsuranceMath.abs(params.amountSpecified);
+        premium = InsuranceMath.premiumBps(basePremiumBps, tradeAmount, referenceLiquidity, tickMove, maxPremiumBps);
     }
 
     function afterSwap(
@@ -166,8 +179,9 @@ contract RiskShieldHook is IHooks {
     ) external onlyPoolManager returns (bytes4, int128) {
         PoolId id = key.toId();
         uint256 premium = (InsuranceMath.abs(params.amountSpecified) * lastPremiumBps[id]) / BPS;
-        vault.accruePremium(PoolId.unwrap(id), premium);
-        emit PremiumAccounted(id, premium);
+        lastPremiumAmount[id] = premium;
+        totalPremiumObserved[id] += premium;
+        emit PremiumObserved(id, premium);
         return (IHooks.afterSwap.selector, 0);
     }
 
