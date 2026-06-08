@@ -26,6 +26,15 @@ RiskShield uses a dynamic-fee hook and custom periphery behavior. A normal swap 
 
 The correct production direction is a dedicated periphery path, or integration with Universal Router / Permit2 once the core risk engine is finalized.
 
+For the UHI9 demo, "router quoteable" means the deployed `RiskShieldPoolRouter.quotePremium` function can quote the hook-aware premium path before execution. It does not mean the native Uniswap app or Universal Router has been extended to understand RiskShield's additional insurance-premium payment.
+
+This distinction is intentional. The hookathon proof prioritizes a transparent, inspectable flow:
+
+1. quote the premium from the hook;
+2. pull only the calculated USDC premium from the trader;
+3. fund the approved vault reserve path;
+4. execute the v4 swap through PoolManager.
+
 ## Production Extension
 
 A production version should add:

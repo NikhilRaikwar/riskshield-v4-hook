@@ -479,6 +479,40 @@ body::after {
 .tx-hash:hover { background: var(--teal); color: white; }
 
 .live-metrics-grid { margin-top: 16px; }
+.judge-flow-card { margin-bottom: 16px; }
+.judge-flow-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+.judge-step {
+  min-width: 0;
+  background: var(--cream);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+.judge-num {
+  display: inline-flex;
+  margin-bottom: 8px;
+  font-family: 'DM Mono', monospace;
+  font-size: .62rem;
+  color: var(--gold);
+  letter-spacing: .08em;
+}
+.judge-step strong {
+  display: block;
+  font-size: .78rem;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+.judge-step p {
+  font-size: .7rem;
+  line-height: 1.5;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
 .tx-activity-card { margin-top: 16px; }
 .tx-activity-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .tx-activity-row {
@@ -617,6 +651,7 @@ body::after {
   .grid-2 { grid-template-columns: 1fr; }
   .grid-3 { grid-template-columns: 1fr 1fr; }
   .grid-4 { grid-template-columns: repeat(2,1fr); }
+  .judge-flow-grid { grid-template-columns: 1fr 1fr; }
   .status-grid  { grid-template-columns: 1fr 1fr; }
   .form-row-2   { grid-template-columns: 1fr; }
   .compare-grid { grid-template-columns: 1fr; }
@@ -742,6 +777,7 @@ button, input, a, .tx-hash, .addr-mono, .dr-val, .dc-val { min-width: 0; }
   .hero-stats,
   .grid-4,
   .grid-3,
+  .judge-flow-grid,
   .status-grid {
     grid-template-columns: 1fr;
   }

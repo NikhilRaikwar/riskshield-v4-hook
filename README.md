@@ -2,6 +2,8 @@
 
 RiskShield makes Uniswap v4 LPing insurable by splitting liquidity into senior protected LP capital and junior first-loss insurance capital.
 
+RiskShield turns impermanent loss into a priced, transferable risk market inside a Uniswap v4 pool. Senior LPs get protected liquidity. Junior insurers earn premium yield. Traders fund the reserve through hook-aware dynamic premiums.
+
 Project ID: `HK-UHI9-0946`
 
 UHI9 Theme: Impermanent Loss and Yield Systems
@@ -22,6 +24,16 @@ RiskShield introduces an insurance layer around a Uniswap v4 pool:
 - Pool risk limits prevent senior protection from overcommitting the junior reserve.
 
 The MVP keeps the mechanism self-contained. It avoids perps, lending, options, and external oracle dependencies so the hook is easy to reason about and demo.
+
+## Why This Is Novel
+
+RiskShield is not just a dynamic fee hook, an IL calculator, or a standalone insurance vault. The core idea is tranche-based LP risk separation attached to real Uniswap v4 pool lifecycle events:
+
+- Vanilla LPs sit in one blended risk class and absorb IL silently.
+- Senior LPs enter protected liquidity and receive capped IL coverage on exit.
+- Junior insurers provide first-loss USDC capital and earn premium yield.
+- Traders pay small risk-priced premiums during volatile or larger swaps.
+- The hook prices risk during swaps and records LP protection during liquidity lifecycle callbacks.
 
 ## Why Uniswap v4 Hooks
 
@@ -66,6 +78,20 @@ RiskShieldVault
    - premium reserve
    - senior position accounting
    - covered IL settlement
+```
+
+```mermaid
+flowchart LR
+    T["Trader"] --> R["RiskShieldPoolRouter"]
+    R -->|quote premium| H["RiskShieldHook"]
+    R -->|pay USDC premium| V["RiskShieldVault"]
+    R -->|unlock + swap| P["Uniswap v4 PoolManager"]
+    P -->|beforeSwap / afterSwap| H
+    S["Senior LP"] -->|protected liquidity| P
+    P -->|afterAddLiquidity| H
+    H -->|open senior position| V
+    J["Junior Insurer"] -->|first-loss USDC| V
+    V -->|covered IL payout| S
 ```
 
 ## Contracts
@@ -135,6 +161,35 @@ Last premium: 17 bps
 Pool tick after smoke: -30
 Active pool liquidity: 10000000000
 ```
+
+## What Judges Should Verify
+
+- Hook address has permission bits `0x07c0`.
+- Pool is initialized through the real Unichain Sepolia PoolManager.
+- Senior protected liquidity was opened through `PoolManager.modifyLiquidity`.
+- A v4 swap executed through the hook-aware `RiskShieldPoolRouter`.
+- Trader-paid USDC premium was credited into the vault reserve.
+- Junior share price increased after premium accrual.
+- Active protected liability is tracked and locks reserve capacity.
+- The frontend reads live Unichain Sepolia metrics and links to Uniscan proofs.
+
+## Security Model
+
+- Hook callbacks are gated by `msg.sender == PoolManager`.
+- Router allowlisting protects premium funding because v4 hook `sender` represents router context, not the end user.
+- `beforeSwapReturnDelta` is disabled to avoid the dangerous custom-delta swap path.
+- Senior protection is blocked when reserve capacity is insufficient.
+- Coverage is capped by reserve balance, max coverage bps, and active position liability.
+- Junior withdrawal is blocked when reserve is backing active senior coverage.
+- The hook-aware router quotes the premium before execution and pulls only the calculated USDC premium from the trader.
+
+## Known Limitations and Production Extensions
+
+- The current demo uses real Circle testnet USDC as reserve capital, but it is not production insurance.
+- `mRISK` is a controlled demo risk asset so the hookathon flow is deterministic.
+- RiskShield uses a custom hook-aware periphery router today; native Universal Router / Permit2 command integration is a production extension.
+- The MVP keeps exit pricing deterministic and does not use a production oracle yet.
+- Direct PoolManager fee redirection into the reserve is future hardening; the current proof funds the reserve through the approved router path alongside the swap.
 
 ## Local Setup
 

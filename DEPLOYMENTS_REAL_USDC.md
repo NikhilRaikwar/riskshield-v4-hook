@@ -93,6 +93,27 @@ Pool tick: -30
 Pool liquidity: 10000000000
 ```
 
+Final judge verification checklist:
+
+```text
+Hook code present: yes
+Vault code present: yes
+Router code present: yes
+Vault hook matches RiskShieldHook: yes
+Router approved on vault: yes
+Hook permission bits: 0x07c0
+Pool initialized: yes
+Senior protected liquidity opened: yes
+v4 swap executed through PoolManager path: yes
+Trader-paid premium credited to reserve: yes
+```
+
+Routing note:
+
+```text
+RiskShield is quoted and executed through RiskShieldPoolRouter, the hook-aware demo periphery. Native Universal Router / Permit2 support is documented as a production extension and is not overclaimed for the hookathon build.
+```
+
 Frontend real-USDC mode:
 
 ```text

@@ -378,7 +378,7 @@ function fmtRisk(value) {
 function fmtAllowance(value, decimals, symbol) {
   const amount = value ?? 0n;
   if (amount === 0n) return `0 ${symbol}`;
-  if (amount > maxUint256 / 2n) return `Unlimited ${symbol}`;
+  if (amount > maxUint256 / 2n) return `MaxUint allowance`;
 
   const normalized = Number(formatUnits(amount, decimals));
   if (normalized >= 1_000_000) {
@@ -428,6 +428,7 @@ function applyDeploymentModeText() {
   setText("deployment-mode-label", IS_REAL_USDC_MODE ? "Real USDC Mode" : "Mock Demo Mode");
   setText("j-btn1", IS_REAL_USDC_MODE ? "1 Check USDC Balance" : "1 Mint MockUSDC");
   setText("s-btn1", IS_REAL_USDC_MODE ? "1 Mint mRISK" : "1 Mint mUSDC + mRISK");
+  setText("sw-btn", "Execute v4 Swap + Pay Trader Premium");
   setText("junior-step-mint-label", IS_REAL_USDC_MODE ? "Check wallet USDC balance" : "Mint mUSDC to connected wallet");
   setText(
     "junior-card-copy",
@@ -479,7 +480,7 @@ function setTxLine(targetId, hash) {
   link.href = txUrl(hash);
   link.target = "_blank";
   link.rel = "noreferrer";
-  link.textContent = `${hash.slice(0, 14)}...`;
+  link.textContent = `${hash.slice(0, 14)}...${hash.slice(-6)} open`;
   target.appendChild(document.createElement("br"));
   target.appendChild(link);
 }
@@ -499,7 +500,7 @@ function addTxActivity(label, hash, status = "Submitted") {
   row.innerHTML = `
     <div>
       <div class="tx-label">${label}</div>
-      <a class="tx-hash" href="${txUrl(hash)}" target="_blank" rel="noreferrer">${hash.slice(0, 14)}...${hash.slice(-6)} ↗</a>
+      <a class="tx-hash" href="${txUrl(hash)}" target="_blank" rel="noreferrer">${hash.slice(0, 14)}...${hash.slice(-6)} open</a>
     </div>
     <span class="tx-status">${status}</span>
   `;
@@ -1027,7 +1028,7 @@ function installDomHandlers() {
       markButton("sw-btn", "state-done", "Swap Executed");
       toast(`Swap premium paid ${fmtUsdc(premiumAmount)} at ${premiumBps.toString()} bps: ${short(hash)}`);
       await refreshOnchainState();
-      setTimeout(() => markButton("sw-btn", "", "Execute v4 Swap + Pay Premium"), 2500);
+      setTimeout(() => markButton("sw-btn", "", "Execute v4 Swap + Pay Trader Premium"), 2500);
     } catch (error) {
       resetPendingButtons();
       toast(friendlyError(error));
@@ -1073,6 +1074,21 @@ function injectLiveDashboardCards() {
   if (document.getElementById("riskshield-live-metrics")) return;
   const overview = document.getElementById("panel-overview");
 
+  const judgeFlow = document.createElement("div");
+  judgeFlow.id = "riskshield-judge-flow";
+  judgeFlow.className = "card judge-flow-card";
+  judgeFlow.innerHTML = `
+    <div class="card-title">Judge Demo Flow</div>
+    <div class="card-sub">RiskShield turns IL into a priced risk market inside a real Uniswap v4 pool. Use these five checks to verify the full mechanism quickly.</div>
+    <div class="judge-flow-grid">
+      <div class="judge-step"><span class="judge-num">01</span><strong>Real v4 pool</strong><p>CREATE2-mined hook with permission bits 0x07c0, initialized through Unichain Sepolia PoolManager.</p></div>
+      <div class="judge-step"><span class="judge-num">02</span><strong>Junior reserve</strong><p>Real Circle testnet USDC backs the first-loss insurance reserve and receives premium yield.</p></div>
+      <div class="judge-step"><span class="judge-num">03</span><strong>Senior LP</strong><p>afterAddLiquidity records protected entry amounts, entry price, and coverage liability.</p></div>
+      <div class="judge-step"><span class="judge-num">04</span><strong>Trader premium</strong><p>RiskShieldPoolRouter quotes the hook premium and pulls only the trader-paid USDC premium.</p></div>
+      <div class="judge-step"><span class="judge-num">05</span><strong>IL settlement</strong><p>The vault compares hold value vs exit value and caps coverage by reserve, risk config, and liability.</p></div>
+    </div>
+  `;
+
   const metrics = document.createElement("div");
   metrics.id = "riskshield-live-metrics";
   metrics.className = "grid-2 live-metrics-grid";
@@ -1113,6 +1129,7 @@ function injectLiveDashboardCards() {
     </div>
   `;
 
+  overview?.append(judgeFlow);
   overview?.append(metrics);
   overview?.append(activity);
 }
