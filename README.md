@@ -6,9 +6,9 @@ RiskShield makes Uniswap v4 LPing insurable by splitting liquidity into senior p
 
 RiskShield turns impermanent loss into a priced, transferable risk market inside a Uniswap v4 pool. Senior LPs get protected liquidity. Junior insurers earn premium yield. Traders fund the reserve through hook-aware dynamic premiums.
 
-**Live app:** [riskshield.vercel.app](https://riskshield.vercel.app/)  
-**Demo video:** [Watch the final UHI9 demo](https://youtu.be/OjjJOUXtRm8)  
-**Slide deck:** [View the RiskShield pitch deck](https://drive.google.com/file/d/1V95o8Ataci5LTHBwavrqMbUOyshVkxxk/view?usp=sharing)
+- **Live app:** [riskshield.vercel.app](https://riskshield.vercel.app/)
+- **Demo video:** [Watch the final UHI9 demo](https://youtu.be/OjjJOUXtRm8)
+- **Slide deck:** [View the RiskShield pitch deck](https://drive.google.com/file/d/1V95o8Ataci5LTHBwavrqMbUOyshVkxxk/view?usp=sharing)
 
 **Project ID:** `HK-UHI9-0946`
 **UHI9 Theme:** Impermanent Loss and Yield Systems
