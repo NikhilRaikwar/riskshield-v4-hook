@@ -526,15 +526,15 @@ function encodeTickHookData(tick) {
 }
 
 function RiskShieldShell() {
-  const { address, chainId, isConnected } = useAccount();
+  const { address, chainId, isConnected, status } = useAccount();
   const { disconnect, disconnectAsync } = useDisconnect();
   const publicClient = usePublicClient({ chainId: unichainSepolia.id });
   const { data: walletClient } = useWalletClient({ chainId: unichainSepolia.id });
   const { switchChainAsync } = useSwitchChain();
 
   const live = useMemo(
-    () => ({ address, chainId, disconnect, disconnectAsync, isConnected, publicClient, walletClient, switchChainAsync }),
-    [address, chainId, disconnect, disconnectAsync, isConnected, publicClient, walletClient, switchChainAsync],
+    () => ({ address, chainId, disconnect, disconnectAsync, isConnected, status, publicClient, walletClient, switchChainAsync }),
+    [address, chainId, disconnect, disconnectAsync, isConnected, status, publicClient, walletClient, switchChainAsync],
   );
 
   useEffect(() => {
@@ -542,13 +542,23 @@ function RiskShieldShell() {
   }, [live]);
 
   useEffect(() => {
-    if (isConnected && address) {
-      showDashboard(address);
-      refreshOnchainState();
-      return;
-    }
-    showLanding();
-  }, [isConnected, address]);
+    const syncRoute = () => {
+      if (isConnected && address) {
+        showDashboard(address);
+        refreshOnchainState();
+      } else if (status === "disconnected") {
+        showLanding();
+      }
+    };
+
+    syncRoute();
+    const animationFrame = requestAnimationFrame(syncRoute);
+    const retry = setTimeout(syncRoute, 250);
+    return () => {
+      cancelAnimationFrame(animationFrame);
+      clearTimeout(retry);
+    };
+  }, [isConnected, address, status]);
 
   useEffect(() => {
     installDomHandlers();
@@ -790,10 +800,6 @@ async function write(address, abi, functionName, args, label = functionName) {
   window.__riskshieldTxInFlight = true;
   try {
     const ctx = await ensureReady();
-    const nonce = await ctx.publicClient.getTransactionCount({
-      address: ctx.address,
-      blockTag: "pending",
-    });
     const hash = await ctx.walletClient.writeContract({
       chain: unichainSepolia,
       account: ctx.address,
@@ -801,7 +807,6 @@ async function write(address, abi, functionName, args, label = functionName) {
       abi,
       functionName,
       args,
-      nonce,
     });
     await waitFor(hash, label);
     return hash;
@@ -1173,6 +1178,7 @@ function showDashboard(address) {
   injectLiveDashboardCards();
   const landing = document.getElementById("page-landing");
   const dashboard = document.getElementById("page-dashboard");
+  const wasHidden = dashboard?.style.display !== "block";
   if (landing && dashboard) {
     landing.style.display = "none";
     dashboard.style.display = "block";
@@ -1180,7 +1186,7 @@ function showDashboard(address) {
   }
   setText("dash-wallet", short(address));
   setText("dash-chain", "Unichain Sepolia");
-  toast(`Wallet connected ${short(address)}`);
+  if (wasHidden) toast(`Wallet connected ${short(address)}`);
 }
 
 function showLanding() {
