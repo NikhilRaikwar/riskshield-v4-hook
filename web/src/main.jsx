@@ -2,6 +2,7 @@ import "@rainbow-me/rainbowkit/styles.css";
 import "./riskshield-design.css";
 
 import React, { useEffect, useMemo } from "react";
+import { Analytics } from "@vercel/analytics/react";
 import { createRoot } from "react-dom/client";
 import { connectorsForWallets, RainbowKitProvider, ConnectButton } from "@rainbow-me/rainbowkit";
 import { injectedWallet, metaMaskWallet } from "@rainbow-me/rainbowkit/wallets";
@@ -1200,6 +1201,7 @@ createRoot(document.getElementById("app")).render(
       <QueryClientProvider client={queryClient}>
         <RainbowKitProvider>
           <RiskShieldShell />
+          <Analytics />
         </RainbowKitProvider>
       </QueryClientProvider>
     </WagmiProvider>
