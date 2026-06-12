@@ -117,6 +117,19 @@ const vaultAbi = [
   },
   {
     type: "function",
+    name: "resolvedRiskConfig",
+    stateMutability: "view",
+    inputs: [{ name: "poolId", type: "bytes32" }],
+    outputs: [
+      { name: "maxCoverageBps", type: "uint256" },
+      { name: "reserveUtilizationBps", type: "uint256" },
+      { name: "maxSeniorExposure", type: "uint256" },
+      { name: "minReserve", type: "uint256" },
+      { name: "maxPremiumBps", type: "uint256" },
+    ],
+  },
+  {
+    type: "function",
     name: "poolReserves",
     stateMutability: "view",
     inputs: [{ name: "poolId", type: "bytes32" }],
@@ -517,7 +530,7 @@ function encodeSeniorHookData(account) {
       { type: "uint256" },
       { type: "uint256" },
     ],
-    [1, account, parseUnits("1", 18), parseUnits("2000", 6), parseUnits("2000", 18)],
+    [1, account, parseUnits("1", 18), parseUnits("2", 6), parseUnits("2", 18)],
   );
 }
 
@@ -611,7 +624,11 @@ async function waitFor(hash, label = "Transaction") {
   addTxActivity(label, hash, "Pending");
   toast(`Transaction submitted ${short(hash)}`);
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  addTxActivity(label, hash, receipt.status === "success" ? "Confirmed" : "Reverted");
+  if (receipt.status !== "success") {
+    addTxActivity(label, hash, "Reverted");
+    throw new Error(`${label} reverted onchain. Open ${txUrl(hash)} for the failed transaction.`);
+  }
+  addTxActivity(label, hash, "Confirmed");
   toast(`${label} confirmed ${short(hash)}`);
   return receipt;
 }
@@ -800,7 +817,7 @@ async function write(address, abi, functionName, args, label = functionName) {
   window.__riskshieldTxInFlight = true;
   try {
     const ctx = await ensureReady();
-    const hash = await ctx.walletClient.writeContract({
+    const { request } = await ctx.publicClient.simulateContract({
       chain: unichainSepolia,
       account: ctx.address,
       address,
@@ -808,6 +825,7 @@ async function write(address, abi, functionName, args, label = functionName) {
       functionName,
       args,
     });
+    const hash = await ctx.walletClient.writeContract(request);
     await waitFor(hash, label);
     return hash;
   } finally {
@@ -954,6 +972,38 @@ function installDomHandlers() {
         toast(`Router approval confirmed ${short(hash)}`);
       } else {
         markButton("s-btn3", "state-pending", "Submitting...");
+        const [reserve, activeLiability, riskConfig] = await Promise.all([
+          ctx.publicClient.readContract({
+            address: ADDRESSES.vault,
+            abi: vaultAbi,
+            functionName: "reserveAvailable",
+            args: [POOL_ID],
+          }),
+          ctx.publicClient.readContract({
+            address: ADDRESSES.vault,
+            abi: vaultAbi,
+            functionName: "activeProtectedLiability",
+            args: [POOL_ID],
+          }),
+          ctx.publicClient.readContract({
+            address: ADDRESSES.vault,
+            abi: vaultAbi,
+            functionName: "resolvedRiskConfig",
+            args: [POOL_ID],
+          }),
+        ]);
+        const [maxCoverageBps, reserveUtilizationBps, maxSeniorExposure, minReserve] = riskConfig;
+        const newLiability = (parseUnits("2", 6) * maxCoverageBps) / 10_000n;
+        const capacity = (reserve * reserveUtilizationBps) / 10_000n;
+        if (
+          reserve < minReserve ||
+          activeLiability + newLiability > capacity ||
+          activeLiability + newLiability > maxSeniorExposure
+        ) {
+          throw new Error(
+            `Senior protection capacity is full. Available capacity is ${fmtUsdc(capacity - activeLiability)}; this position requires ${fmtUsdc(newLiability)}. Deposit more junior USDC before opening another protected position.`,
+          );
+        }
         const hookData = encodeSeniorHookData(ctx.address);
         const hash = await write(
           ADDRESSES.router,
@@ -961,7 +1011,7 @@ function installDomHandlers() {
           "modifyLiquidity",
           [
             poolKey,
-            { tickLower: -60, tickUpper: 60, liquidityDelta: 1000000000000n, salt: `0x${"0".repeat(64)}` },
+            { tickLower: -60, tickUpper: 60, liquidityDelta: 10000000000n, salt: `0x${"0".repeat(64)}` },
             hookData,
           ],
           "Open senior liquidity",
