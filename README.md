@@ -180,6 +180,12 @@ The hook address has the required `0x07c0` permission mask and the pool has been
 
 Uniswap v4 pools are not separate pool contracts. The RiskShield pool lives inside the singleton PoolManager and is identified by its Pool ID. On the transaction pages, use **Internal Transactions** and **Logs** to inspect the router-to-PoolManager call, hook callbacks, pool events, and premium transfer.
 
+Decode the canonical swap proof directly from Unichain Sepolia:
+
+```bash
+node tools/inspect-swap-proof.mjs
+```
+
 Latest smoke proof:
 
 ```text
