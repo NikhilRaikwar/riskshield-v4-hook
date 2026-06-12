@@ -49,8 +49,6 @@ const RESERVE_SYMBOL = IS_REAL_USDC_MODE ? "USDC" : "mUSDC";
 const RESERVE_NAME = IS_REAL_USDC_MODE ? "Circle testnet USDC" : "MockUSDC";
 const MIN_SQRT_PRICE_PLUS_ONE = 4295128740n;
 const MAX_SQRT_PRICE_MINUS_ONE = 1461446703485210103287273052203988822378723970341n;
-const SQRT_PRICE_TICK_NEG_30 = 79109415290437042302807587396n;
-const SQRT_PRICE_TICK_30 = 79347087983666005045280518415n;
 
 const [currency0, currency1] =
   BigInt(ADDRESSES.mockRiskAsset) < BigInt(ADDRESSES.mockUSDC)
@@ -459,7 +457,9 @@ function applyDeploymentModeText() {
   if (IS_REAL_USDC_MODE) {
     const swapSize = document.getElementById("sw-size");
     const premiumBase = document.getElementById("sw-fund");
-    if (swapSize && swapSize.value === "1000") swapSize.value = "0.001";
+    if (swapSize && (swapSize.value === "1000" || swapSize.value === "0.001")) {
+      swapSize.value = "0.000000001";
+    }
     if (premiumBase && premiumBase.value === "1000") premiumBase.value = "0.01";
   }
 }
@@ -1045,20 +1045,14 @@ function installDomHandlers() {
     try {
       await ensureReady();
       const tick = Math.trunc(getInput("sw-tick", 120));
-      const swapInput = getInput("sw-size", IS_REAL_USDC_MODE ? 0.001 : 1000);
+      const swapInput = getInput("sw-size", IS_REAL_USDC_MODE ? 0.000000001 : 1000);
       const swapSize = IS_REAL_USDC_MODE ? parseUnits(String(swapInput), 18) : parseUnits(String(swapInput), 6);
       const premiumBase = parseUnits(String(getInput("sw-fund", IS_REAL_USDC_MODE ? 0.01 : 1000)), 6);
       const zeroForOne = IS_REAL_USDC_MODE ? RISK_IS_CURRENCY0 : true;
       const swapParams = {
         zeroForOne,
         amountSpecified: -swapSize,
-        sqrtPriceLimitX96: IS_REAL_USDC_MODE
-          ? zeroForOne
-            ? SQRT_PRICE_TICK_NEG_30
-            : SQRT_PRICE_TICK_30
-          : zeroForOne
-            ? MIN_SQRT_PRICE_PLUS_ONE
-            : MAX_SQRT_PRICE_MINUS_ONE,
+        sqrtPriceLimitX96: zeroForOne ? MIN_SQRT_PRICE_PLUS_ONE : MAX_SQRT_PRICE_MINUS_ONE,
       };
       const hookData = encodeTickHookData(tick);
       markButton("sw-btn", "state-pending", "Executing swap...");
