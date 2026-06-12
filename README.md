@@ -1,12 +1,21 @@
 # RiskShield - Tranche-Based IL Insurance Hook
 
+![RiskShield - Tranche-Based IL Insurance Hook](assets/banner.png)
+
 RiskShield makes Uniswap v4 LPing insurable by splitting liquidity into senior protected LP capital and junior first-loss insurance capital.
 
 RiskShield turns impermanent loss into a priced, transferable risk market inside a Uniswap v4 pool. Senior LPs get protected liquidity. Junior insurers earn premium yield. Traders fund the reserve through hook-aware dynamic premiums.
 
-Project ID: `HK-UHI9-0946`
+**Live app:** [riskshield.vercel.app](https://riskshield.vercel.app/)
 
-UHI9 Theme: Impermanent Loss and Yield Systems
+**Project ID:** `HK-UHI9-0946`
+**UHI9 Theme:** Impermanent Loss and Yield Systems
+
+![Unichain Sepolia](https://img.shields.io/badge/Network-Unichain%20Sepolia-ff2e9f)
+![Uniswap v4](https://img.shields.io/badge/Protocol-Uniswap%20v4-fc72ff)
+![Reserve](https://img.shields.io/badge/Reserve-Real%20Testnet%20USDC-2775ca)
+![Hook Permissions](https://img.shields.io/badge/Hook%20Permissions-0x07c0-1a7a60)
+![Build](https://img.shields.io/badge/Build-Passing-1a7a60)
 
 ## Problem
 
@@ -92,6 +101,20 @@ flowchart LR
     H -->|open senior position| V
     J["Junior Insurer"] -->|first-loss USDC| V
     V -->|covered IL payout| S
+
+    classDef trader fill:#fdf3d8,stroke:#c8920a,color:#18120a
+    classDef senior fill:#fdf3d8,stroke:#c8920a,color:#18120a
+    classDef junior fill:#d4ede6,stroke:#1a7a60,color:#18120a
+    classDef hook fill:#ffd6ec,stroke:#fc72ff,color:#18120a
+    classDef core fill:#18120a,stroke:#fc72ff,color:#f8f4ed
+    classDef vault fill:#d4ede6,stroke:#1a7a60,color:#18120a
+
+    class T trader
+    class S senior
+    class J junior
+    class H hook
+    class P,R core
+    class V vault
 ```
 
 ## Contracts
@@ -147,6 +170,15 @@ Pool ID: 0xb0dda0a853ae4eefb5ed690dc7de5cfefe01ef3572152e0170db69c3e57f71c4
 ```
 
 The hook address has the required `0x07c0` permission mask and the pool has been initialized on Unichain Sepolia. The latest CLI smoke test proves junior USDC reserve funding, protected senior liquidity, and trader-paid premium funding through `swapAndPayPremium`.
+
+### Explorer Proof
+
+- [Official Unichain Sepolia PoolManager](https://sepolia.uniscan.xyz/address/0x00b036b58a818b1bc34d502d3fe730db729e62ac)
+- [RiskShield pool initialization](https://sepolia.uniscan.xyz/tx/0xc312b19a705727cf4381fc6adabd021ada1ff1cd9b4f8be560b4792e957c46a0)
+- [Protected senior liquidity through the v4 PoolManager path](https://sepolia.uniscan.xyz/tx/0x509383492f853e6e12213712f3ee677e8ab2449deeb182e55e87548c8c517b4d)
+- [v4 swap and trader-paid USDC premium](https://sepolia.uniscan.xyz/tx/0xe49dc0e0b373a2ef507d25a4e1b35d0d2be19cab7b70459322b590a45ab0ffab)
+
+Uniswap v4 pools are not separate pool contracts. The RiskShield pool lives inside the singleton PoolManager and is identified by its Pool ID. On the transaction pages, use **Internal Transactions** and **Logs** to inspect the router-to-PoolManager call, hook callbacks, pool events, and premium transfer.
 
 Latest smoke proof:
 
@@ -248,7 +280,15 @@ See `DEPLOYMENTS.md` for the address log, transaction hashes, and smoke readback
 
 ## Frontend
 
-The Progress Update 2 frontend is a local demo surface for RiskShield's insurance accounting path.
+The final dashboard is hosted at:
+
+```text
+https://riskshield.vercel.app/
+```
+
+It supports wallet connection on Unichain Sepolia, live deployed-contract metrics, junior reserve deposits, protected senior liquidity, premium quoting/payment, transaction explorer links, and deterministic IL coverage simulation.
+
+For local development:
 
 ```bash
 npm run dev
@@ -256,7 +296,16 @@ npm run dev
 
 Open `http://127.0.0.1:5173`.
 
-The frontend can connect a wallet, show deployed addresses, calculate senior LP coverage previews, and interact with deployed mock USDC / vault addresses.
+## Judge Demo Walkthrough
+
+1. Open [riskshield.vercel.app](https://riskshield.vercel.app/) and review the senior, junior, and trader mechanism.
+2. Click **Connect Wallet**, choose MetaMask or an injected wallet, and switch to Unichain Sepolia.
+3. Open **Overview** to show live reserve, junior share price, active liability, pool tick, and pool liquidity.
+4. Open **Junior Insurer** to explain first-loss USDC capital, premium yield, and locked reserve.
+5. Open **Senior LP** to show how `afterAddLiquidity` records a protected position.
+6. Open **Trader Premium** to quote a premium, then show the confirmed Uniscan swap/premium transaction.
+7. Open **IL Coverage** to compare vanilla LP shortfall with capped RiskShield coverage.
+8. Open **Deployment** to show permission bits `0x07c0`, PoolManager integration, deployed addresses, and explorer proofs.
 
 ## Progress Updates
 

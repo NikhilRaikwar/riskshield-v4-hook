@@ -2,6 +2,8 @@
 
 Target length: 3 minutes.
 
+Live app: `https://riskshield.vercel.app/`
+
 ## Core Pitch
 
 RiskShield turns impermanent loss into a priced, transferable risk market inside a Uniswap v4 pool. Senior LPs get protected liquidity. Junior insurers earn premium yield. Traders fund the reserve through hook-aware dynamic premiums.
@@ -65,6 +67,10 @@ This is not just local accounting. The hook address is mined with valid v4 permi
 
 Show:
 
+- Open `https://riskshield.vercel.app/`.
+- Click **Connect Wallet**.
+- Choose MetaMask or the installed browser wallet.
+- Approve the connection and switch to **Unichain Sepolia** if prompted.
 - Overview live metrics.
 - Reserve available: `2.017 USDC`.
 - Junior share price: `1.0085`.
@@ -76,7 +82,19 @@ Show:
 Say:
 
 ```text
-The dashboard is reading live Unichain Sepolia state. Premiums increase the junior share price when losses are low, and active senior liability locks reserve so junior capital cannot be withdrawn while it is backing protection.
+I will connect my wallet and switch to Unichain Sepolia. The dashboard now reads live state from the deployed RiskShield contracts. The reserve has 2.017 USDC, the junior share price increased to 1.0085 after premium accrual, and 0.6 USDC is locked as active protected liability.
+```
+
+Then open each tab and say:
+
+```text
+In Junior Insurer, first-loss USDC capital earns trader-paid premium yield, while the withdrawal guard prevents reserve from being removed when it backs senior protection.
+
+In Senior LP, afterAddLiquidity records the protected entry and creates a capped coverage liability.
+
+In Trader Premium, the hook-aware router quotes the premium before execution, performs the real v4 swap through PoolManager, and transfers only the calculated USDC premium into the reserve.
+
+In IL Coverage, the same insurance math compares hold value against LP exit value and caps the payout by reserve, coverage configuration, and position liability.
 ```
 
 ### 2:20-3:00 - Why It Wins
